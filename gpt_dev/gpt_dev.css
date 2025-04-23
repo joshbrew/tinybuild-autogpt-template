@@ -1,0 +1,303 @@
+/* gpt_dev.css */
+
+/* full-screen & centered; allow global scroll if too narrow */
+body {
+  margin: 0;
+  display: flex;
+  height: 100vh;
+  background: linear-gradient(135deg, #2c3e50, #000c1a);
+  justify-content: center;
+  align-items: center;
+  font-family: 'Segoe UI', sans-serif;
+  overflow: auto; /* enable scrolling when viewport is smaller */
+}
+
+/* container holds sidebar + chat panel */
+.gpt-container {
+  /* prevent over-compression */
+  min-width: 600px;
+  display: flex;
+  width: 100%;
+  max-width: 1000px;
+  height: 80vh;
+  max-height: 90vh;
+  background: #1f2430;
+  border-radius: 12px;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+  overflow: auto; /* scroll when content overflows */
+}
+
+
+/* sidebar styling */
+.thread-sidebar {
+  /* fixed sidebar minimum */
+  min-width: 200px;
+  /* hide horizontal scrollbar */
+  overflow-x: hidden;
+  width: 200px;
+  background: #12151f;
+  color: #eee;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid #444;
+  overflow-y: auto; /* allow thread list scroll */
+}
+
+.sidebar-header {
+  padding: 0.75rem;
+  font-weight: bold;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #444;
+}
+
+.new-chat-btn {
+  background: transparent;
+  border: none;
+  color: #4caf50;
+  font-size: 1.2rem;
+  cursor: pointer;
+}
+.new-chat-btn:hover {
+  color: #81c784;
+}
+
+/* Title input only visible when creating new chat; hidden by default */
+.thread-sidebar input.thread-name-sidebar {
+  margin: 0.5rem;
+  padding: 0.4rem;
+  width: calc(100% - 1rem);
+  background: #2a2e3b;
+  border: 1px solid #666;
+  color: #fff;
+  border-radius: 4px;
+  display: none; /* toggled via JavaScript */
+}
+.thread-sidebar input.thread-name-sidebar::placeholder {
+  color: #888;
+}
+
+.thread-list {
+  /* hide horizontal overflow */
+  overflow-x: hidden;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1;
+}
+.thread-list li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.5rem 0.75rem;
+  cursor: pointer;
+  border-bottom: 1px solid #333;
+}
+.thread-list li.selected {
+  background: #1f2430;
+}
+.thread-item-label {
+  flex: 1;
+  color: #eee;
+}
+.delete-thread-btn {
+  background: transparent;
+  border: none;
+  color: #e57373;
+  font-size: 1rem;
+  cursor: pointer;
+}
+.delete-thread-btn:hover {
+  color: #ef5350;
+}
+
+/* main chat area */
+.chat-main {
+  /* prevent over-compression */
+  min-width: 300px;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* header */
+.gpt-chat-header {
+  display: flex;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  background: #12151f;
+  border-bottom: 1px solid #444;
+}
+.gpt-chat-header .chat-title {
+  flex: 1;
+  margin: 0;
+  font-size: 1.25rem;
+  color: #fff;
+}
+.gpt-chat-header button {
+  margin-left: 0.5rem;
+}
+
+/* chat message pane */
+.gpt-chat-messages {
+  /* hide horizontal overflow */
+  overflow-x: hidden;
+  flex: 1;
+  padding: 1rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.gpt-chat-message {
+  margin-bottom: 1rem;
+}
+.gpt-chat-message .meta {
+  font-size: 0.75rem;
+  color: #888;
+  margin-bottom: 0.25rem;
+}
+.gpt-chat-message.user .content {
+  background: #2a5b8d;
+  color: #fff;
+}
+.gpt-chat-message.assistant .content {
+  background: #333841;
+  color: #ddd;
+}
+.gpt-chat-message .content {
+  padding: 1rem 2.5rem 1rem 0.75rem;
+  border-radius: 6px;
+  white-space: pre-wrap;
+  position: relative;
+}
+
+/* input form */
+.gpt-chat-form {
+  padding: 0.5rem;
+  background: #12151f;
+  border-top: 1px solid #444;
+  display: flex;
+}
+.gpt-chat-form input {
+  flex: 1;
+  padding: 0.75rem;
+  border: none;
+  background: #1f2430;
+  color: #eee;
+  font-size: 1rem;
+}
+.gpt-chat-form button {
+  padding: 0 1.5rem;
+  border: none;
+  background: #4caf50;
+  color: white;
+  font-size: 1rem;
+  cursor: pointer;
+}
+.gpt-chat-form button:disabled {
+  opacity: 0.6;
+}
+
+
+/* responsive: stack sidebar above chat on narrow screens */
+@media (max-width: 600px) {
+  .gpt-container {
+    flex-direction: column;
+    height: auto;
+    max-height: 100vh;
+  }
+  .thread-sidebar {
+    width: 100%;
+    height: 200px;
+  }
+  .chat-main {
+    height: calc(100vh - 200px);
+  }
+}
+
+/* override container on small screens */
+@media (max-width: 600px) {
+  .gpt-container {
+    min-width: 0 !important;
+    width: 100vw !important;
+    height: 100vh !important;
+    border-radius: 0 !important;
+  }
+}
+
+
+/* File Tree Modal */
+#fileModal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.8);
+  color: #eee;
+  overflow: auto;
+  padding: 2rem;
+  z-index: 1000;
+}
+#fileModal .close {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  background: #333;
+  color: #fff;
+  border: none;
+  padding: 0.5rem;
+  cursor: pointer;
+}
+
+/* Folders */
+.file-node {
+  --emoji-color: #FFD54F;
+  cursor: pointer;
+  user-select: none;
+}
+.file-node::before {
+  content: "📁";
+  color: transparent;
+  text-shadow: 0 0 0 var(--emoji-color);
+  margin-right: 0.5rem;
+}
+/* Files */
+.file-leaf {
+  --emoji-color: #999;
+}
+.file-leaf::before {
+  content: "📄";
+  color: transparent;
+  text-shadow: 0 0 0 var(--emoji-color);
+  margin-right: 0.5rem;
+}
+/* ext colors */
+.file-leaf.js   { --emoji-color: #f1e05a; }
+.file-leaf.css  { --emoji-color: #563d7c; }
+.file-leaf.html { --emoji-color: #e34c26; }
+.file-leaf.json { --emoji-color: #292929; }
+.file-leaf.txt  { --emoji-color: #999999; }
+/* nested */
+.file-node + ul,
+.file-leaf + ul {
+  list-style: none;
+  margin: 0 0 0 1.5rem;
+  padding: 0;
+  display: block;
+}
+.file-node.collapsed + ul {
+  display: none;
+}
+
+#fileModal ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+#fileModal li {
+  list-style: none;
+  margin: 0.25rem 0;
+  padding: 0;
+  line-height: 1.4;
+}

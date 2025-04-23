@@ -56,3 +56,7 @@ Add build:true for build-only, add serve:true for serve-only, or set bundle or s
 - Explore run failures and attempt to restart. It is a persistent bug in the assistants cloud api but you can just say try again until it goes through.
 - Add ability for gpt to restart the concurrent environment if the gpt dev needs modifying? >_> <_< maybe a bad idea idk
 
+## Want to Contribute?
+
+Make a pull request, issue, or email me :-)
+

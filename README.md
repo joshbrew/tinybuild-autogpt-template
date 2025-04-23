@@ -35,6 +35,12 @@ And much more can be configured with the `tinybuild.config.js`
 
 Have fun watching your website or webapp code itself! Assistant runs tend to be a bit slow depending on the model, and not all models can use assistants yet. Currently it is set to GPT-4.1 but you can just set the model from this list: https://platform.openai.com/docs/pricing
 
+## Prompting Tips
+
+### [Example Video](https://youtu.be/84Pggzt8A0c)
+
+Tell it to read e.g. index.css or index.js and then edit it to use web components or a react root rather than editing index.html. This will stop it from screwing up the imports too much. Remind it to check itself. It can also npm install for you or re-prompt itself if explicitly instructed to just run free on the tasks you give it.
+
 ## Configuration
 
 See [`./tinybuild.config.js`](./tinybuild.config.js) for settings. 
@@ -44,6 +50,6 @@ Add build:true for build-only, add serve:true for serve-only, or set bundle or s
 ## TODO:
 
 - Improve chat frontend (it's jank), 
-- Explore run failures and attempt to restart.
-- Add ability to restart the concurrent environment if the gpt dev needs modifying? >_> <_<
+- Explore run failures and attempt to restart. It is a persistent bug in the assistants cloud api but you can just say try again until it goes through.
+- Add ability for gpt to restart the concurrent environment if the gpt dev needs modifying? >_> <_< maybe a bad idea idk
 

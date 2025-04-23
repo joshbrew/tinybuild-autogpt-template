@@ -6,7 +6,7 @@ First, in this directory, run:
 
 Also: `npm i -g concurrently` for useful multi-process cli tool we use.
 
-Then with `tinybuild` installed globally (`npm i -g tinybuild`) run: 
+Then with [`tinybuild`](https://github.com/joshbrew/tinybuild) installed globally (`npm i -g tinybuild`) run: 
 
 `npm start`
 

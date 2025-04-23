@@ -6,7 +6,7 @@ First, in this directory, run:
 
 Also: `npm i -g concurrently` for useful multi-process cli tool we use.
 
-Then with `tinybuild` installed globally (`npm i -g tinybuild`) run: 
+Then with [`tinybuild`](https://github.com/joshbrew/tinybuild) installed globally (`npm i -g tinybuild`) run: 
 
 `npm start`
 
@@ -40,6 +40,9 @@ Have fun watching your website or webapp code itself! Assistant runs tend to be 
 ### [Example Video](https://youtu.be/84Pggzt8A0c)
 
 Tell it to read e.g. index.css or index.js and then edit it to use web components or a react root rather than editing index.html. This will stop it from screwing up the imports too much. Remind it to check itself. It can also npm install for you or re-prompt itself if explicitly instructed to just run free on the tasks you give it.
+
+### Some joke code written entirely by GPT with CSS, Canvas, and ThreeJS animations (including installing its own dependencies):
+![image](https://github.com/user-attachments/assets/4d74c8da-828b-4feb-a882-81387c996938)
 
 ## Configuration
 

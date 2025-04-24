@@ -51,6 +51,8 @@ Please submit your own samples or vibe code some self-improvements to this overa
 
 I keep coming up with more ideas as I run into missing functionality e.g. screencapping or getting the live built code for self-debugging against a lack of visual feedback. Sometimes this requires a fresh pass to reorganize the backend code so the app can upgrade itself. Lots of possibilities, hmm..
 
+Make a pull request, github issue, or email me :-)
+
 ### Some joke code written entirely by GPT with CSS, Canvas, and ThreeJS animations (including installing its own dependencies):
 ![image](https://github.com/user-attachments/assets/4d74c8da-828b-4feb-a882-81387c996938)
 
@@ -66,3 +68,5 @@ Add build:true for build-only, add serve:true for serve-only, or set bundle or s
 - Explore run failures and attempt to restart. It is a persistent bug in the assistants cloud api but you can just say try again until it goes through.
 - Add ability for gpt to restart the concurrent environment if the gpt dev needs modifying? >_> <_< maybe a bad idea idk
 - Add screencapping ability (expensive!!) for more automation, better test console logging, help GPT systematize its approach to editing and debugging better to take your hands off the wheel even more.
+
+

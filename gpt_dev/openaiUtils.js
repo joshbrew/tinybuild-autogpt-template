@@ -240,16 +240,16 @@ export const functionSchemas = [
         properties:{ new_prompt:{ type:'string' } },
         required:['new_prompt']
       }
-    },
-    {
-      name: 'get_console_history',
-      description: 'Return the browser’s console.log/info/warn/error history as JSON',
-      parameters: {
-        type: 'object',
-        properties: { },
-        required: []
-      }
-    }
+    }//,
+    // {
+    //   name: 'get_console_history',
+    //   description: 'Return the browser’s console.log/info/warn/error history as JSON',
+    //   parameters: {
+    //     type: 'object',
+    //     properties: { },
+    //     required: []
+    //   }
+    // }
 ];
   
 export const tools = functionSchemas.map(fn => ({ type:'function', function:fn }));
@@ -385,6 +385,8 @@ export async function runToolCalls(toolCalls) {
         result = 'Scheduled self-prompt';
         break;
       // get_console_history would go here...
+
+
     }
 
     fnLogs.push({ type:'function_call', name, arguments:args });
@@ -394,6 +396,12 @@ export async function runToolCalls(toolCalls) {
       { role:'tool', tool_call_id:tc.id, name, content:result }
     );
   }
+
+  fnLogs.forEach((l) => {
+    if(l?.type === 'function_call') { 
+      console.log("Assistant called", l.name);
+    }
+  })
 
   return { fnLogs, follow, selfPrompt };
 }
@@ -713,8 +721,10 @@ export async function initConversation(threadId, title, savedDir) {
     convo = { messages: [], openaiThreadId: thread.id, title: title || '' };
     logSuccess(`Thread created ${thread.id}`);
   }
-  if (!convo.title) convo.title = title || localId || 'Chat';
-  logInfo(`Conversation title set to "${convo.title}"`);
+  if (!convo.title) {
+      convo.title = title || localId || 'Chat';
+      logInfo(`Conversation title set to "${convo.title}"`);
+  }
   return { localId, convo };
 }
 

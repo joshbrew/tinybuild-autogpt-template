@@ -253,6 +253,7 @@ export const functionSchemas = [
 ];
   
 export const tools = functionSchemas.map(fn => ({ type:'function', function:fn }));
+
 // ─── Rate Limiting ───────────────────────────────────────────────────
 const RATE_LIMIT_INTERVAL_MS = 500; // Minimum interval between OpenAI API calls (500ms = 120 RPM)
 let lastApiCallTime = 0;
@@ -410,16 +411,55 @@ export async function waitForRunCompletion(threadId, runId) {
 }
 
 export async function clearActiveRuns(threadId) {
-  await rateLimit();
-  const runs = await openai.beta.threads.runs.list(threadId, { limit:50 });
-  for (const r of runs.data) {
-    if (['queued','in_progress'].includes(r.status)) {
-      try {
-        await rateLimit();
-        await openai.beta.threads.runs.del(threadId, r.id);
-      } catch {}
+  let cursor = null;
+  do {
+    const res = await openai.beta.threads.runs.list(threadId, {
+      limit: 50,
+      ...(cursor ? { cursor } : {})
+    });
+    for (const r of res.data) {
+      if (['queued', 'in_progress'].includes(r.status)) {
+        try {
+          await rateLimit();
+          await openai.beta.threads.runs.del(threadId, r.id);
+        } catch {
+          // ignore individual delete errors
+        }
+      }
     }
-  }
+    cursor = res.next_cursor;
+  } while (cursor);
+}
+
+/**
+ * Waits for any queued, in-progress, or requires_action runs to complete before proceeding.
+ */
+export async function waitForActiveRuns(threadId) {
+  let cursor = null;
+  do {
+    const res = await openai.beta.threads.runs.list(threadId, {
+      limit: 50,
+      ...(cursor ? { cursor } : {})
+    });
+    for (const r of res.data) {
+      if (['queued', 'in_progress', 'requires_action'].includes(r.status)) {
+        // If waiting on your tool outputs, drive it to completion
+        if (r.status === 'requires_action') {
+          const { fnLogs: newLogs, follow, selfPrompt } =
+            await runToolCalls(r.required_action.submit_tool_outputs.tool_calls);
+          await rateLimit();
+          await openai.beta.threads.runs.submitToolOutputs(threadId, r.id, {
+            tool_outputs: follow
+              .filter(m => m.role === 'tool')
+              .map(t => ({ tool_call_id: t.tool_call_id, output: t.content }))
+          });
+        }
+        // then wait for it to finish
+        await waitForRunCompletion(threadId, r.id);
+      }
+    }
+    cursor = res.next_cursor;
+  } while (cursor);
 }
 
 export async function safeCreateMessage(threadId, params) {
@@ -429,6 +469,9 @@ export async function safeCreateMessage(threadId, params) {
       return await openai.beta.threads.messages.create(threadId, params);
     } catch (err) {
       if (err.status === 400 && err.error?.message.includes('active run')) {
+        // first let any legitimate runs finish
+        await waitForActiveRuns(threadId);
+        // then clear only true orphans
         await clearActiveRuns(threadId);
         continue;
       }
@@ -449,11 +492,28 @@ export function unlockThread(threadId) {
   threadLocks.delete(threadId);
 }
 
+// ─── Utils for colored logging ─────────────────────────────────────────
+const COLORS = {
+  reset: "\x1b[0m",
+  cyan: "\x1b[36m",
+  green: "\x1b[32m",
+  yellow: "\x1b[33m",
+  red: "\x1b[31m",
+  magenta: "\x1b[35m"
+};
+function logInfo(msg)    { console.log(`${COLORS.cyan}[INFO]${COLORS.reset} ${msg}`); }
+function logSuccess(msg) { console.log(`${COLORS.green}[OK]${COLORS.reset}  ${msg}`); }
+function logWarn(msg)    { console.warn(`${COLORS.yellow}[WARN]${COLORS.reset} ${msg}`); }
+function logError(msg)   { console.error(`${COLORS.red}[ERR]${COLORS.reset}  ${msg}`); }
+
 // ─── Persistence ─────────────────────────────────────────────────────
 export async function loadConversation(fp) {
+  logInfo(`Loading conversation from ${fp}`);
   try {
     const raw = await fs.readFile(fp, 'utf-8');
+    logSuccess(`File read successfully`);
     const data = JSON.parse(raw);
+    logSuccess(`JSON parsed, ${Array.isArray(data) ? data.length : data.messages.length} messages`);
     if (Array.isArray(data)) {
       return { messages: data, openaiThreadId: null, title: '' };
     }
@@ -462,12 +522,14 @@ export async function loadConversation(fp) {
       openaiThreadId: data.openaiThreadId || null,
       title:          data.title || data.openaiThreadId
     };
-  } catch {
+  } catch (err) {
+    logWarn(`Could not load conversation (${err.message}), starting fresh`);
     return { messages: [], openaiThreadId: null, title: '' };
   }
 }
 
 export async function saveConversation(fp, convo) {
+  logInfo(`Saving conversation to ${fp}`);
   await fs.mkdir(path.dirname(fp), { recursive:true });
   await fs.writeFile(fp,
     JSON.stringify({
@@ -477,31 +539,44 @@ export async function saveConversation(fp, convo) {
     }, null,2),
     'utf-8'
   );
+  logSuccess(`Conversation saved (${convo.messages.length} messages)`);
 }
 
 // ─── Ensure or create assistant ──────────────────────────────────────
 export async function ensureAssistant() {
+  logInfo(`Ensuring assistant exists`);
   let existing;
   try {
+    logInfo(`Reading assistant file ${ASSISTANT_FILE}`);
     const raw = await fs.readFile(ASSISTANT_FILE, 'utf-8');
     existing = JSON.parse(raw);
+    logSuccess(`Found existing assistant ID ${existing.assistantId}`);
   } catch {
+    logWarn(`No existing assistant file`);
     existing = null;
   }
 
   const currentInstr = DEFAULT_SYSTEM_PROMPT.trim();
-
   if (existing?.assistantId && existing.instructions === currentInstr) {
+    logSuccess(`Using cached assistant ${existing.assistantId}`);
     return existing.assistantId;
   }
+
   if (existing?.assistantId) {
+    logWarn(`Instructions changed; deleting old assistant ${existing.assistantId}`);
     try {
       await rateLimit();
+      logInfo(`API CALL: delete assistant ${existing.assistantId}`);
       await openai.beta.assistants.del(existing.assistantId);
-    } catch {}
+      logSuccess(`Deleted assistant ${existing.assistantId}`);
+    } catch (err) {
+      logError(`Failed to delete old assistant: ${err.message}`);
+    }
   }
 
+  logInfo(`Creating new assistant`);
   await rateLimit();
+  logInfo(`API CALL: create assistant`);
   const asst = await openai.beta.assistants.create({
     name: 'Server Assistant',
     instructions: currentInstr,
@@ -509,93 +584,143 @@ export async function ensureAssistant() {
     model: MODEL
   });
   const assistantId = asst.id;
+  logSuccess(`Created assistant ${assistantId}`);
+
   await fs.mkdir(path.dirname(ASSISTANT_FILE), { recursive:true });
   await fs.writeFile(ASSISTANT_FILE,
     JSON.stringify({ assistantId, instructions:currentInstr }, null,2),
     'utf-8'
   );
+  logSuccess(`Assistant file updated`);
   return assistantId;
 }
 
 // ─── Core prompt flow ─────────────────────────────────────────────────
 export async function handlePrompt({ prompt, threadId, title, systemPrompt }, savedDir) {
-  if (!prompt?.trim()) throw new Error('Missing prompt');
-  const assistantId = await ensureAssistant();
+  if (!prompt?.trim()) {
+    return { error: true, errorMessage: 'Missing prompt', logs: [] };
+  }
 
-  // Load or create conversation
-  const { localId, convo } = await initConversation(threadId, title, savedDir);
+  let allLogs = [];
+  let convo, localId, assistantId;
 
-  // We'll try up to 3 times if something goes wrong
-  const MAX_ATTEMPTS = 3;
-  let lastError;
+  // initial setup
+  assistantId = await ensureAssistant();
+  ({ localId, convo } = await initConversation(threadId, title, savedDir));
 
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    try {
-      await lockThread(convo.openaiThreadId);
+  // acquire thread lock
+  await lockThread(convo.openaiThreadId);
+  try {
+    // ensure no stray runs before starting
+    if (convo.openaiThreadId) {
+      await waitForActiveRuns(convo.openaiThreadId);
       await clearActiveRuns(convo.openaiThreadId);
-
-      // 1) POST the user message
-      const userMsg = await postUserMessage(convo.openaiThreadId, prompt);
-      convo.messages.push(userMsg);
-
-      // 2) Run the assistant + tools
-      const { fnLogs, selfPrompt } = await runAssistantLoop(
-        convo.openaiThreadId,
-        assistantId,
-        systemPrompt || DEFAULT_SYSTEM_PROMPT
-      );
-
-      // 3) Fetch the assistant’s reply
-      const asst = await fetchAssistantReply(convo.openaiThreadId, fnLogs, runAssistantLoop.lastStatus);
-      if (runAssistantLoop.lastStatus !== 'completed') {
-        throw new Error(`Run failed with status ${runAssistantLoop.lastStatus}`);
-      }
-      convo.messages.push(asst);
-
-      // 4) Handle any chained self-prompt
-      if (selfPrompt) {
-        const extra = await handleSelfPrompt(convo.openaiThreadId, assistantId, selfPrompt);
-        convo.messages.push(...extra);
-      }
-
-      // 5) Persist everything locally
-      await saveConversation(path.join(savedDir, `${localId}.txt`), convo);
-      return {
-        logs: fnLogs,
-        result: flattenContent(asst.content),
-        threadId: localId,
-        openaiThreadId: convo.openaiThreadId,
-        userMessageId: userMsg.id,
-        assistantMessageId: asst.id
-      };
-
-    } catch (err) {
-      lastError = err;
-      try { unlockThread(convo.openaiThreadId); } catch {}
-      if (attempt < MAX_ATTEMPTS) continue;
-      throw lastError;
-    } finally {
-      try { unlockThread(convo.openaiThreadId); } catch {}
     }
+
+    // Try up to 3 times
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        // before posting the user message, wait & clear any active runs
+        if (convo.openaiThreadId) {
+          await waitForActiveRuns(convo.openaiThreadId);
+          await clearActiveRuns(convo.openaiThreadId);
+        }
+
+        // 1) post user message
+        const userMsg = await postUserMessage(convo.openaiThreadId, prompt);
+        convo.messages.push(userMsg);
+
+        // 2) run assistant + tools
+        const { fnLogs, selfPrompt } = await runAssistantLoop(
+          convo.openaiThreadId,
+          assistantId,
+          systemPrompt || DEFAULT_SYSTEM_PROMPT
+        );
+        allLogs.push(...fnLogs);
+
+        // 3) fetch assistant reply
+        const asst = await fetchAssistantReply(
+          convo.openaiThreadId,
+          fnLogs,
+          runAssistantLoop.lastStatus
+        );
+        if (runAssistantLoop.lastStatus !== 'completed') {
+          throw new Error(`Run failed with status ${runAssistantLoop.lastStatus}`);
+        }
+        convo.messages.push(asst);
+
+        // 4) optional self-prompt
+        if (selfPrompt) {
+          const extra = await handleSelfPrompt(convo.openaiThreadId, assistantId, selfPrompt);
+          convo.messages.push(...extra);
+        }
+
+        // 5) save conversation
+        await saveConversation(path.join(savedDir, `${localId}.txt`), convo);
+
+        // SUCCESS
+        return {
+          error: false,
+          logs: allLogs,
+          result: flattenContent(asst.content),
+          threadId: localId,
+          openaiThreadId: convo.openaiThreadId,
+          userMessageId: userMsg.id,
+          assistantMessageId: asst.id
+        };
+
+      } catch (err) {
+        // record this retry
+        allLogs.push({ type: 'retry', attempt, error: err.message });
+
+        if (attempt === 3) {
+          // on last attempt, bubble the error out to outer catch
+          throw err;
+        }
+
+        // Clear stuck runs before retrying
+        try {
+          if (convo.openaiThreadId) {
+            await clearActiveRuns(convo.openaiThreadId);
+          }
+        } catch {}
+        continue;
+      }
+    }
+  } catch (err) {
+    return { error: true, errorMessage: err.message, logs: allLogs };
+  } finally {
+    // always release the lock
+    try { unlockThread(convo.openaiThreadId); } catch {}
   }
 }
 
+
+// ─── Init conversation ────────────────────────────────────────────────
 export async function initConversation(threadId, title, savedDir) {
+  logInfo(`initConversation (threadId=${threadId})`);
   let localId, convo;
   if (threadId) {
     localId = threadId;
+    logInfo(`Loading existing convo file`);
     convo = await loadConversation(path.join(savedDir, `${localId}.txt`));
   } else {
+    logInfo(`Creating new thread via API`);
     await rateLimit();
+    logInfo(`API CALL: create thread`);
     const thread = await openai.beta.threads.create();
     localId = thread.id;
     convo = { messages: [], openaiThreadId: thread.id, title: title || '' };
+    logSuccess(`Thread created ${thread.id}`);
   }
   if (!convo.title) convo.title = title || localId || 'Chat';
+  logInfo(`Conversation title set to "${convo.title}"`);
   return { localId, convo };
 }
 
+// ─── Post a user message ─────────────────────────────────────────────
 export async function postUserMessage(openaiThreadId, prompt) {
+  logInfo(`API CALL: postUserMessage to thread ${openaiThreadId}`);
   const msg = await safeCreateMessage(openaiThreadId, {
     role: 'user',
     content: [{ type:'text', text: prompt.trim() }]
@@ -605,29 +730,36 @@ export async function postUserMessage(openaiThreadId, prompt) {
 
 // ─── Assistant/tool run loop ─────────────────────────────────────────
 export async function runAssistantLoop(threadId, assistantId, instructions) {
+  logInfo(`Starting assistant loop (thread=${threadId}, assistant=${assistantId})`);
   let status;
   const fnLogs = [];
   let selfPrompt;
 
   await rateLimit();
+  logInfo(`API CALL: create run`);
   let run = await openai.beta.threads.runs.create(threadId, {
     assistant_id: assistantId,
     instructions,
     tools,
     tool_choice: 'auto'
   });
+  logSuccess(`Run created (id=${run.id})`);
 
   while (true) {
+    logInfo(`Waiting for run ${run.id} completion`);
     run = await waitForRunCompletion(threadId, run.id);
     status = run.status;
+    logInfo(`Run status: ${status}`);
     if (status !== 'requires_action') break;
 
+    logInfo(`Submitting tool outputs`);
     const { fnLogs: newLogs, follow, selfPrompt: sp } =
       await runToolCalls(run.required_action.submit_tool_outputs.tool_calls);
     fnLogs.push(...newLogs);
     selfPrompt = sp || selfPrompt;
 
     await rateLimit();
+    logInfo(`API CALL: submitToolOutputs`);
     await openai.beta.threads.runs.submitToolOutputs(threadId, run.id, {
       tool_outputs: follow
         .filter(m => m.role === 'tool')
@@ -641,13 +773,16 @@ export async function runAssistantLoop(threadId, assistantId, instructions) {
 
 // ─── Fetch or fallback assistant reply ────────────────────────────────
 export async function fetchAssistantReply(threadId, fnLogs, lastStatus) {
+  logInfo(`Listing last messages for thread ${threadId}`);
   await rateLimit();
+  logInfo(`API CALL: list messages`);
   const { data: messages } = await openai.beta.threads.messages.list(
     threadId, { limit: 20, order: 'desc' }
   );
   let asst = messages.find(m => m.role === 'assistant');
   if (!asst || lastStatus !== 'completed') {
     const text = `⚠️ Error: run status ${lastStatus}`;
+    logWarn(`No completed assistant message, synthesizing error reply`);
     asst = {
       id: `synthetic_${Date.now()}`,
       role: 'assistant',
@@ -660,21 +795,25 @@ export async function fetchAssistantReply(threadId, fnLogs, lastStatus) {
 
 // ─── Self-prompt continuation ────────────────────────────────────────
 export async function handleSelfPrompt(threadId, assistantId, selfPrompt) {
+  logInfo(`handleSelfPrompt invoked`);
   await clearActiveRuns(threadId);
+  logInfo(`Posting self-prompt user message`);
   const userMsg = await safeCreateMessage(threadId, {
     role: 'user',
     content: [{ type:'text', text: selfPrompt }]
   });
 
   await rateLimit();
+  logInfo(`API CALL: create run for self-prompt`);
   const run = await openai.beta.threads.runs.create(threadId, { assistant_id: assistantId });
   await waitForRunCompletion(threadId, run.id);
 
   await rateLimit();
+  logInfo(`API CALL: list messages for self-prompt reply`);
   const { data } = await openai.beta.threads.messages.list(threadId, { limit:1 });
+  logSuccess(`Self-prompt reply received`);
   return [userMsg, data[0]];
 }
-
 // ─── Flatten content array to text ───────────────────────────────────
 export function flattenContent(contents) {
   return contents

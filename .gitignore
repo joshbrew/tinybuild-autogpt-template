@@ -8,7 +8,6 @@ dist
 **/*.lock
 **/package-lock.json
 **/*.log
-
 .env
 
 # Built application files

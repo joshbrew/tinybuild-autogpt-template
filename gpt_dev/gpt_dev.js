@@ -1,5 +1,3 @@
-// index.js
-
 import './gpt_dev.css';
 const API_BASE = 'http://localhost:3000';
 
@@ -14,7 +12,7 @@ async function fetchThreads() {
 async function fetchThreadById(id) {
   const res = await fetch(`${API_BASE}/api/threads/${encodeURIComponent(id)}`);
   if (!res.ok) throw new Error(`Failed to load thread ${id}`);
-  return res.json(); // expects { title, messages }
+  return res.json();
 }
 
 async function deleteThreadById(id) {
@@ -197,8 +195,7 @@ class GptChat extends HTMLElement {
   }
 
   _updateControls() {
-    const has = !!this.currentThreadId;
-    this.deleteChatBtn.disabled = !has;
+    this.deleteChatBtn.disabled = !this.currentThreadId;
   }
 
   async _loadThreads() {
@@ -235,7 +232,6 @@ class GptChat extends HTMLElement {
 
       const btn = document.createElement('button');
       btn.className = 'delete-thread-btn';
-      btn.title = 'Delete Chat';
       btn.textContent = '🗑️';
       btn.addEventListener('click', async e => {
         e.stopPropagation();
@@ -316,61 +312,44 @@ class GptChat extends HTMLElement {
 
     const meta = document.createElement('div');
     meta.className = 'meta';
-    meta.textContent = `${role === 'user' ? 'You' : 'GPT'} • ${ts}`;
+    meta.textContent = `${role === 'user' ? 'You' : 
+      role === 'tool' ? '🔧 Tool' : 'GPT'} • ${ts}`;
 
     const content = document.createElement('div');
     content.className = 'content';
     content.textContent = text;
-
-    if (role === 'user') {
-      const btnEdit = document.createElement('button');
-      btnEdit.className = 'edit-msg-btn';
-      btnEdit.textContent = '✏️';
-      btnEdit.addEventListener('click', async () => {
-        const updated = prompt('Edit your message:', text);
-        if (updated == null) return;
-        const msgId = wrap.dataset.msgId;
-        await editMessage(this.currentThreadId, msgId, {
-          content: [{ type: 'text', text: { value: updated, annotations: [] } }],
-          metadata: { edited: true }
-        });
-        content.textContent = updated;
-      });
-
-      const btnDel = document.createElement('button');
-      btnDel.className = 'delete-msg-btn';
-      btnDel.textContent = '🗑️';
-      btnDel.addEventListener('click', async () => {
-        if (!await this._confirm('Delete this message?')) return;
-        const msgId = wrap.dataset.msgId;
-        const resp = await deleteMessageById(this.currentThreadId, msgId);
-        if (resp.ok) wrap.remove();
-      });
-
-      const actions = document.createElement('div');
-      actions.className = 'msg-actions';
-      actions.append(btnEdit, btnDel);
-      wrap.append(actions);
-    }
 
     wrap.append(meta, content);
     this.chatMessages.appendChild(wrap);
     return { wrap };
   }
 
-  _highlightSelectedThread() {
-    this.threadList.querySelectorAll('li').forEach(li => {
-      li.classList.toggle('selected', li.dataset.id === this.currentThreadId);
-    });
+  appendToolEntry(entry) {
+    const ts = new Date().toLocaleTimeString();
+    if (entry.type === 'function_call') {
+      const args = JSON.stringify(entry.arguments);
+      this.appendMessage(
+        'tool',
+        `🛠️ ${entry.name}(${args})`,
+        ts
+      );
+    } else if (entry.type === 'function_result') {
+      this.appendMessage(
+        'tool',
+        `✅ ${entry.name} → ${entry.result}`,
+        ts
+      );
+    }
+    this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
   }
 
   async sendMessage(prompt) {
     if (!prompt.trim()) return;
 
-    const typingEl = document.createElement('div');
-    typingEl.className = 'typing-indicator';
-    typingEl.innerHTML = '<span></span><span></span><span></span>';
-    this.chatMessages.appendChild(typingEl);
+    const loading = document.createElement('div');
+    loading.className = 'typing-indicator';
+    loading.innerHTML = '<span></span><span></span><span></span>';
+    this.chatMessages.appendChild(loading);
     this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
 
     const userTs = new Date().toLocaleString();
@@ -393,35 +372,65 @@ class GptChat extends HTMLElement {
     try {
       json = await sendPrompt(payload);
     } catch (err) {
-      console.error('sendMessage error:', err);
+      // network‐level failure
       placeholderWrap.remove();
-      typingEl.remove();
+      loading.remove();
       this.input.disabled = this.sendBtn.disabled = false;
+      const ts = new Date().toLocaleString();
+      this.appendMessage('assistant', `❌ Network Error: ${err.message}`, ts);
       return;
     }
 
     const {
+      error,
+      errorMessage,
+      logs,
       result,
       threadId,
-      logs,
       userMessageId,
       assistantMessageId
     } = json;
 
-    userWrap.dataset.msgId = userMessageId;
-    placeholderWrap.dataset.msgId = assistantMessageId;
+    // 1) always show whatever ran (including retry entries)
+    logs.forEach(entry => {
+      if (entry.type === 'retry') {
+        // special retry log
+        this.appendMessage(
+          'tool',
+          `🔄 Retry attempt ${entry.attempt}: ${entry.error}`,
+          new Date().toLocaleTimeString()
+        );
+      } else {
+        this.appendToolEntry(entry);
+      }
+    });
 
+    this.input.disabled = this.sendBtn.disabled = false;
+    this.input.focus();
+
+    // 2) if the server says “error”, show it and bail
+    if (error) {
+      const ts = new Date().toLocaleString();
+      this.appendMessage(
+        'assistant',
+        `❌ Error: ${errorMessage}`,
+        ts
+      );
+      return;
+    }
+
+    // 3) otherwise, remove placeholders & render the normal assistant reply
     placeholderWrap.remove();
-    typingEl.remove();
+    loading.remove();
 
+    userWrap.dataset.msgId = userMessageId;
     const ts = new Date().toLocaleString();
-    const text = typeof result === 'string'
+    const content = typeof result === 'string'
       ? result
-      : (Array.isArray(result.choices)
-          ? result.choices.map(c => c.message?.content || c.text).join('\n')
-          : extractContent(result.content || []));
-    const { wrap: assistantWrap } = this.appendMessage('assistant', text, ts);
-    assistantWrap.dataset.msgId = assistantMessageId;
+      : extractContent(result.content || []);
+    const { wrap: asstWrap } = this.appendMessage('assistant', content, ts);
+    asstWrap.dataset.msgId = assistantMessageId;
+
     this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
 
     this.input.disabled = this.sendBtn.disabled = false;
@@ -439,6 +448,13 @@ class GptChat extends HTMLElement {
     this._updateThreadNameSidebarVisibility();
     const th = this.threads.find(t => t.id === threadId);
     this.chatTitleEl.textContent = th.title || 'Untitled Chat';
+
+  }
+
+  _highlightSelectedThread() {
+    this.threadList.querySelectorAll('li').forEach(li => {
+      li.classList.toggle('selected', li.dataset.id === this.currentThreadId);
+    });
   }
 
   async _showFileTree() {
@@ -464,8 +480,6 @@ class GptChat extends HTMLElement {
           const span = document.createElement('span');
           span.textContent = node.name;
           span.classList.add('file-leaf');
-          const ext = node.name.split('.').pop();
-          if (ext) span.classList.add(ext.toLowerCase());
           li.append(span);
         }
         return li;

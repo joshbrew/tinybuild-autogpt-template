@@ -116,19 +116,38 @@ export const apiRoutes = {
       setHeaders(res,200,'application/json');
       res.end(JSON.stringify(updated));
     },
-    DELETE: async (req,res) => {
+    DELETE: async (req, res) => {
       const localId = req.params.thread_id;
-      const convo   = await loadConversation(path.join(SAVED_DIR, `${localId}.txt`));
-      if (!convo.openaiThreadId) {
-        setHeaders(res,404,'application/json');
-        return res.end('{"error":"No OpenAI thread mapped"}');
+      const filePath = path.join(SAVED_DIR, `${localId}.txt`);
+
+      // 1) Load the local conversation file (404 if missing)
+      let convo;
+      try {
+        convo = await loadConversation(filePath);
+      } catch (err) {
+        setHeaders(res, 404, 'application/json');
+        return res.end(JSON.stringify({ error: 'Thread not found' }));
       }
-      // delete on OpenAI
-      const deleted = await openai.beta.threads.del(convo.openaiThreadId);
-      // delete local file
-      await fsp.unlink(path.join(SAVED_DIR, `${localId}.txt`)).catch(()=>{});
-      setHeaders(res,200,'application/json');
-      res.end(JSON.stringify(deleted));
+
+      // 2) Attempt to delete the remote thread, but ignore a 404 if it's already gone
+      if (convo.openaiThreadId) {
+        try {
+          await openai.beta.threads.del(convo.openaiThreadId);
+        } catch (err) {
+          if (err.status !== 404) {
+            // If it's not “not found”, re-throw so the client sees the failure
+            throw err;
+          }
+          // otherwise, swallow the 404 and proceed
+        }
+      }
+
+      // 3) Delete the local file—ignore errors here, since at worst it’s already gone
+      await fsp.unlink(filePath).catch(() => {});
+
+      // 4) Return success
+      setHeaders(res, 200, 'application/json');
+      res.end(JSON.stringify({ success: true }));
     }
   },
 

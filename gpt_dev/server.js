@@ -1,3 +1,4 @@
+// /gpt_dev/server.js
 import * as http  from 'http';
 import * as https from 'https';
 import * as fs    from 'fs';
@@ -5,7 +6,8 @@ import * as path  from 'path';
 import * as fsp   from 'fs/promises';
 
 import { getEnvVar } from './serverUtil.js';
-import { apiRoutes, SAVED_DIR } from './openaiRoutes.js';
+import { SAVED_DIR } from './openaiUtils.js'
+import { apiRoutes } from './openaiRoutes.js';
 
 
 // Ensure the saved folder exists & log existing threads on startup
@@ -92,7 +94,7 @@ async function onRequest(req, res, cfg) {
   // Static file fallback
   let urlPath = url || '/';
   if (urlPath === '/' || urlPath === '') urlPath = '/' + cfg.startpage;
-  if(urlPath === '/gptdev') urlPath = '/gpt_dev.html';
+  if(urlPath === '/gptdev') urlPath = '/gpt_dev/gpt_dev.html';
   const filePath = path.join(process.cwd(), urlPath);
 
   if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
@@ -129,6 +131,7 @@ function startServer(cfg) {
   const server = createServer(cfg);
   server.listen(cfg.port, cfg.host, () => {
     console.log(`🚀 Server running at ${cfg.protocol}://${cfg.host}:${cfg.port}/`);
+    console.log(`💬 Find the live dev chat server at ${cfg.protocol}://${cfg.host}:${cfg.port}/gptdev \n or at your content server ${cfg.protocol}://${cfg.host}:PORT/gptdev`);
   });
 }
 

@@ -3,38 +3,66 @@
 import './gpt_dev.css';
 const API_BASE = 'http://localhost:3000';
 
-const template = document.createElement('template');
-template.innerHTML = `
-  <div class="gpt-container">
-    <div class="thread-sidebar">
-      <div class="sidebar-header">
-        <span>Chats</span>
-        <button class="new-chat-btn" title="New Chat">＋</button>
-      </div>
-      <input class="thread-name-sidebar" type="text" placeholder="Conversation title"/>
-      <ul class="thread-list"></ul>
-    </div>
-    <div class="chat-main">
-      <div class="gpt-chat-header">
-        <h2 class="chat-title">Select or create a chat →</h2>
-        <button class="delete-chat-btn" title="Delete Chat">🗑️</button>
-        <button class="view-files-btn">View Files</button>
-      </div>
-      <div class="gpt-chat-messages"></div>
-      <form class="gpt-chat-form">
-        <input type="text" placeholder="Type your message…" autocomplete="off"/>
-        <button type="submit">Send</button>
-      </form>
-    </div>
-  </div>
-`;
+// ───────────── Network helpers ─────────────
 
-// —————— capture console (limit to last 100 entries) ——————
+async function fetchThreads() {
+  const res = await fetch(`${API_BASE}/api/threads`);
+  if (!res.ok) throw new Error('Failed to load threads');
+  return res.json();
+}
+
+async function fetchThreadById(id) {
+  const res = await fetch(`${API_BASE}/api/threads/${encodeURIComponent(id)}`);
+  if (!res.ok) throw new Error(`Failed to load thread ${id}`);
+  return res.json(); // expects { title, messages }
+}
+
+async function deleteThreadById(id) {
+  return fetch(`${API_BASE}/api/threads/${encodeURIComponent(id)}`, {
+    method: 'DELETE'
+  });
+}
+
+async function sendPrompt(payload) {
+  const res = await fetch(`${API_BASE}/api/prompt`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+async function editMessage(threadId, msgId, contentPayload) {
+  return fetch(
+    `${API_BASE}/api/threads/${encodeURIComponent(threadId)}/messages/${encodeURIComponent(msgId)}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(contentPayload)
+    }
+  );
+}
+
+async function deleteMessageById(threadId, msgId) {
+  return fetch(
+    `${API_BASE}/api/threads/${encodeURIComponent(threadId)}/messages/${encodeURIComponent(msgId)}`,
+    { method: 'DELETE' }
+  );
+}
+
+async function fetchFilesTree() {
+  const res = await fetch(`${API_BASE}/api/files`);
+  if (!res.ok) throw new Error('Failed to load files');
+  return res.json();
+}
+
+// ───────────── capture console (limit to last 100 entries) ─────────────
+
 window.__consoleHistory__ = [];
 ['log', 'info', 'warn', 'error'].forEach(level => {
   const orig = console[level];
   console[level] = (...args) => {
-    // record entry
     window.__consoleHistory__.push({
       level,
       timestamp: new Date().toISOString(),
@@ -42,14 +70,14 @@ window.__consoleHistory__ = [];
         typeof a === 'string' ? a : JSON.stringify(a)
       )
     });
-    // trim history to last 100
     if (window.__consoleHistory__.length > 100) {
       window.__consoleHistory__.shift();
     }
-    // call original
     orig.apply(console, args);
   };
 });
+
+// ───────────── extractContent ─────────────
 
 function extractContent(contentArray = []) {
   return contentArray
@@ -62,10 +90,43 @@ function extractContent(contentArray = []) {
     .join('\n');
 }
 
+// ───────────── template ─────────────
+
+const template = document.createElement('template');
+template.innerHTML = `
+  <div class="gpt-container">
+    <div class="thread-sidebar">
+      <div class="sidebar-header">
+        <span>Chats</span>
+        <button class="new-chat-btn" title="New Chat">＋</button>
+      </div>
+      <input
+        class="thread-name-sidebar"
+        type="text"
+        placeholder="Conversation title…"
+      />
+      <ul class="thread-list"></ul>
+    </div>
+    <div class="chat-main">
+      <div class="gpt-chat-header">
+        <h2 class="chat-title">← Select or create a chat</h2>
+        <button class="delete-chat-btn" title="Delete Chat">🗑️</button>
+        <button class="view-files-btn">View Files</button>
+      </div>
+      <div class="gpt-chat-messages"></div>
+      <form class="gpt-chat-form">
+        <input type="text" placeholder="Type your message…" autocomplete="off"/>
+        <button type="submit">Send</button>
+      </form>
+    </div>
+  </div>
+`;
+
+// ───────────── Custom Element ─────────────
+
 class GptChat extends HTMLElement {
   constructor() {
     super();
-
     this._init = false;
     this.currentThreadId = null;
     this.threads = [];
@@ -74,26 +135,22 @@ class GptChat extends HTMLElement {
   connectedCallback() {
     if (this._init) return;
     this._init = true;
-
     this.append(template.content.cloneNode(true));
 
-    // sidebar
-    this.threadList    = this.querySelector('.thread-list');
-    this.newChatBtn    = this.querySelector('.new-chat-btn');
+    this.threadList        = this.querySelector('.thread-list');
+    this.newChatBtn        = this.querySelector('.new-chat-btn');
     this.threadNameSidebar = this.querySelector('.thread-name-sidebar');
+    this.chatTitleEl       = this.querySelector('.chat-title');
+    this.deleteChatBtn     = this.querySelector('.delete-chat-btn');
+    this.viewFilesBtn      = this.querySelector('.view-files-btn');
+    this.chatMessages      = this.querySelector('.gpt-chat-messages');
+    this.form              = this.querySelector('.gpt-chat-form');
+    this.input             = this.form.querySelector('input');
+    this.sendBtn           = this.form.querySelector('button');
 
-    this.threadNameSidebar.style.display = 'none';        // hide by default
-    // chat area
-    this.chatTitleEl   = this.querySelector('.chat-title');
-    this.threadNameInput = this.querySelector('.thread-name');
-    this.deleteChatBtn   = this.querySelector('.delete-chat-btn');
-    this.viewFilesBtn    = this.querySelector('.view-files-btn');
-    this.chatMessages    = this.querySelector('.gpt-chat-messages');
-    this.form            = this.querySelector('.gpt-chat-form');
-    this.input           = this.form.querySelector('input');
-    this.sendBtn         = this.form.querySelector('button');
+    this.threadNameSidebar.style.display = 'none';
+    this._ensureConfirmModal();
 
-    // event wiring
     this.newChatBtn.addEventListener('click', () => this._createNewThread());
     this.deleteChatBtn.addEventListener('click', () => this._deleteCurrentThread());
     this.viewFilesBtn.addEventListener('click', () => this._showFileTree());
@@ -105,30 +162,70 @@ class GptChat extends HTMLElement {
     this._loadThreads();
   }
 
-  async _loadThreads() {
-    const res = await fetch(`${API_BASE}/api/threads`);
-    if (!res.ok) return;
-    this.threads = await res.json();
-    // sort by ID or title
-    this.threads.sort((a, b) => a.title.localeCompare(b.title));
-    this._renderThreadList();
+  _ensureConfirmModal() {
+    if (document.getElementById('confirmModal')) return;
+    const modal = document.createElement('div');
+    modal.id = 'confirmModal';
+    modal.innerHTML = `
+      <div class="modal-content">
+        <p class="modal-message"></p>
+        <div class="modal-buttons">
+          <button class="btn-cancel">Cancel</button>
+          <button class="btn-ok">OK</button>
+        </div>
+      </div>
+    `;
+    modal.addEventListener('click', e => {
+      if (e.target === modal) modal.classList.remove('visible');
+    });
+    modal.querySelector('.btn-cancel').addEventListener('click', () => {
+      modal._resolve(false);
+      modal.classList.remove('visible');
+    });
+    modal.querySelector('.btn-ok').addEventListener('click', () => {
+      modal._resolve(true);
+      modal.classList.remove('visible');
+    });
+    document.body.append(modal);
+  }
 
-    // auto‐select the most recent if none selected
-    if (!this.currentThreadId && this.threads.length) {
-      await this._selectThread(this.threads[this.threads.length - 1].id);
+  _confirm(message) {
+    const modal = document.getElementById('confirmModal');
+    modal.querySelector('.modal-message').textContent = message;
+    modal.classList.add('visible');
+    return new Promise(resolve => (modal._resolve = resolve));
+  }
+
+  _updateControls() {
+    const has = !!this.currentThreadId;
+    this.deleteChatBtn.disabled = !has;
+  }
+
+  async _loadThreads() {
+    try {
+      this.threads = await fetchThreads();
+      this.threads.sort((a, b) => a.title.localeCompare(b.title));
+      this._renderThreadList();
+      if (this.threads.length) {
+        await this._selectThread(this.threads[this.threads.length - 1].id);
+      } else {
+        this._createNewThread();
+      }
+    } catch (err) {
+      console.error(err);
     }
   }
 
-  /** helper to toggle the sidebar title‐input */
   _updateThreadNameSidebarVisibility() {
     this.threadNameSidebar.style.display =
-    this.currentThreadId === null ? 'block' : 'none';
+      this.currentThreadId === null ? 'block' : 'none';
   }
 
   _renderThreadList() {
     this.threadList.innerHTML = '';
     this.threads.forEach(({ id, title }) => {
       const li = document.createElement('li');
+      li.dataset.id = id;
       li.classList.toggle('selected', id === this.currentThreadId);
 
       const span = document.createElement('span');
@@ -142,16 +239,15 @@ class GptChat extends HTMLElement {
       btn.textContent = '🗑️';
       btn.addEventListener('click', async e => {
         e.stopPropagation();
-        if (!confirm('Delete this chat?')) return;
-        await fetch(`${API_BASE}/api/threads/${encodeURIComponent(id)}`, {
-          method: 'DELETE'
-        });
-        // remove from local list & UI
+        if (!await this._confirm('Delete this chat?')) return;
+        await deleteThreadById(id);
         this.threads = this.threads.filter(t => t.id !== id);
         if (this.currentThreadId === id) {
           this.currentThreadId = null;
           this.clearChat();
-          this.threadNameInput.value = '';
+          this.chatTitleEl.textContent = 'New Chat';
+          this._updateThreadNameSidebarVisibility();
+          this._updateControls();
         }
         this._renderThreadList();
       });
@@ -161,76 +257,53 @@ class GptChat extends HTMLElement {
     });
   }
 
+  async _deleteCurrentThread() {
+    if (!this.currentThreadId) return;
+    if (!await this._confirm('Delete this entire chat?')) return;
+    await deleteThreadById(this.currentThreadId);
+    this.threads = this.threads.filter(t => t.id !== this.currentThreadId);
+
+    this.currentThreadId = null;
+    this.clearChat();
+    this.chatTitleEl.textContent = 'New Chat';
+    this._renderThreadList();
+    this._updateThreadNameSidebarVisibility();
+    this._updateControls();
+  }
+
   async _createNewThread() {
     this.currentThreadId = null;
     this.clearChat();
     this.threadNameSidebar.value = '';
     this._renderThreadList();
-    this._updateThreadNameSidebarVisibility();   // <-- show it
+    this._updateThreadNameSidebarVisibility();
+    this.chatTitleEl.textContent = 'New Chat';
+    this._updateControls();
+    setTimeout(() => this.threadNameSidebar.focus(), 0);
   }
 
   async _selectThread(id) {
     this.currentThreadId = id;
-    this._highlightSelectedThread();
-    this._updateThreadNameSidebarVisibility();   // <-- hide it
-
-    const res = await fetch(`${API_BASE}/api/threads/${encodeURIComponent(id)}`);
-    if (!res.ok) return;
-    const { title, messages } = await res.json();
-
-    // Update header and sidebar‐input
-    this.chatTitleEl.textContent       = title || 'Untitled Chat';
-    this.threadNameSidebar.value       = title || '';
-
-    // Render messages in time order
-    this.clearChat();
-    (messages || [])
-      .sort((a, b) => a.created_at - b.created_at)
-      .forEach(msg => {
-        const ts   = new Date(msg.created_at * 1000).toLocaleString();
-        const text = extractContent(msg.content);
-        const { wrap } = this.appendMessage(msg.role, text, ts);
-        wrap.dataset.msgId = msg.id;
-      });
-
-    this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
-  }
-
-
-  async _renameThread() {
-    const id = this.currentThreadId;
-    const newTitle = this.threadNameInput.value.trim();
-    if (!id || !newTitle) return;
-    const res = await fetch(
-      `${API_BASE}/api/threads/${encodeURIComponent(id)}/title`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title: newTitle })
-      }
-    );
-    if (!res.ok) return;
-    // update local
-    this.threads = this.threads.map(t =>
-      t.id === id ? { ...t, title: newTitle } : t
-    );
     this._renderThreadList();
-  }
+    this._updateThreadNameSidebarVisibility();
+    this._updateControls();
 
-  async _deleteCurrentThread() {
-    const id = this.currentThreadId;
-    if (!id || !confirm('Delete this entire chat?')) return;
-    const res = await fetch(
-      `${API_BASE}/api/threads/${encodeURIComponent(id)}`,
-      { method: 'DELETE' }
-    );
-    if (!res.ok) return;
-    // refresh
-    this.threads = this.threads.filter(t => t.id !== id);
-    this.currentThreadId = null;
-    this.clearChat();
-    this.threadNameInput.value = '';
-    this._renderThreadList();
+    try {
+      const { title, messages } = await fetchThreadById(id);
+      this.chatTitleEl.textContent = title || 'Untitled Chat';
+      this.clearChat();
+      (messages || [])
+        .sort((a, b) => a.created_at - b.created_at)
+        .forEach(msg => {
+          const ts = new Date(msg.created_at * 1000).toLocaleString();
+          const text = extractContent(msg.content);
+          const { wrap } = this.appendMessage(msg.role, text, ts);
+          wrap.dataset.msgId = msg.id;
+        });
+      this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
+    } catch (err) {
+      console.error(err);
+    }
   }
 
   clearChat() {
@@ -238,202 +311,173 @@ class GptChat extends HTMLElement {
   }
 
   appendMessage(role, text, ts) {
-  // Outer wrapper
-  const wrap = document.createElement('div');
-  wrap.className = `gpt-chat-message ${role}`;
+    const wrap = document.createElement('div');
+    wrap.className = `gpt-chat-message ${role}`;
 
-  // Timestamp + author line
-  const meta = document.createElement('div');
-  meta.className = 'meta';
-  meta.textContent = `${role === 'user' ? 'You' : 'GPT'} • ${ts}`;
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = `${role === 'user' ? 'You' : 'GPT'} • ${ts}`;
 
-  // Bubble content
-  const content = document.createElement('div');
-  content.className = 'content';
-  content.textContent = text;
-  // establish positioning context for the buttons
-  content.style.position = 'relative';
+    const content = document.createElement('div');
+    content.className = 'content';
+    content.textContent = text;
 
-  // Only user‐messages get edit/delete buttons
-  if (role === 'user') {
-    // ✏️ Edit button
-    const btnEdit = document.createElement('button');
-    btnEdit.className = 'edit-msg-btn';
-    btnEdit.textContent = '✏️';
-    btnEdit.addEventListener('click', async () => {
-      const updated = prompt('Edit your message:', text);
-      if (updated == null) return;
-      const msgId = wrap.dataset.msgId;
-      await fetch(
-        `${API_BASE}/api/threads/${encodeURIComponent(this.currentThreadId)}/messages/${msgId}`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            content: [{ type: 'text', text: { value: updated, annotations: [] } }],
-            metadata: { edited: true }
-          })
-        }
-      );
-      content.textContent = updated;
-      // move buttons back into the new text node
-      content.append(btnEdit, btnDel);
-    });
+    if (role === 'user') {
+      const btnEdit = document.createElement('button');
+      btnEdit.className = 'edit-msg-btn';
+      btnEdit.textContent = '✏️';
+      btnEdit.addEventListener('click', async () => {
+        const updated = prompt('Edit your message:', text);
+        if (updated == null) return;
+        const msgId = wrap.dataset.msgId;
+        await editMessage(this.currentThreadId, msgId, {
+          content: [{ type: 'text', text: { value: updated, annotations: [] } }],
+          metadata: { edited: true }
+        });
+        content.textContent = updated;
+      });
 
-    // 🗑️ Delete button
-    const btnDel = document.createElement('button');
-    btnDel.className = 'delete-msg-btn';
-    btnDel.textContent = '🗑️';
-    btnDel.addEventListener('click', async () => {
-      if (!confirm('Delete this message?')) return;
-      const msgId = wrap.dataset.msgId;
-      const resp = await fetch(
-        `${API_BASE}/api/threads/${encodeURIComponent(this.currentThreadId)}/messages/${msgId}`,
-        { method: 'DELETE' }
-      );
-      if (resp.ok) wrap.remove();
-    });
+      const btnDel = document.createElement('button');
+      btnDel.className = 'delete-msg-btn';
+      btnDel.textContent = '🗑️';
+      btnDel.addEventListener('click', async () => {
+        if (!await this._confirm('Delete this message?')) return;
+        const msgId = wrap.dataset.msgId;
+        const resp = await deleteMessageById(this.currentThreadId, msgId);
+        if (resp.ok) wrap.remove();
+      });
 
-    // append into the bubble
-    content.append(btnEdit, btnDel);
+      const actions = document.createElement('div');
+      actions.className = 'msg-actions';
+      actions.append(btnEdit, btnDel);
+      wrap.append(actions);
+    }
+
+    wrap.append(meta, content);
+    this.chatMessages.appendChild(wrap);
+    return { wrap };
   }
 
-  // build DOM
-  wrap.append(meta, content);
-  this.chatMessages.appendChild(wrap);
-
-  return { wrap };
-}
-
-
   _highlightSelectedThread() {
-    // toggle 'selected' on every <li> by matching its data-id
     this.threadList.querySelectorAll('li').forEach(li => {
       li.classList.toggle('selected', li.dataset.id === this.currentThreadId);
     });
   }
-  
+
   async sendMessage(prompt) {
     if (!prompt.trim()) return;
 
-    // 1) Echo user
-    const userTs = new Date().toLocaleString();
-    this.appendMessage('user', prompt, userTs);
+    const typingEl = document.createElement('div');
+    typingEl.className = 'typing-indicator';
+    typingEl.innerHTML = '<span></span><span></span><span></span>';
+    this.chatMessages.appendChild(typingEl);
     this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
 
-    // 2) Disable & clear
+    const userTs = new Date().toLocaleString();
+    const { wrap: userWrap } = this.appendMessage('user', prompt, userTs);
+    this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
+
     this.input.disabled = this.sendBtn.disabled = true;
     this.input.value = '';
 
-    // 3) Dummy placeholder (we'll remove it)
-    const placeholder = this.appendMessage('assistant', '…', '');
+    const { wrap: placeholderWrap } = this.appendMessage('assistant', '…', '');
     this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
 
-    // 4) Call the backend
     const payload = {
       prompt,
       threadId: this.currentThreadId,
-      ...(this.currentThreadId ? {} : { title: this.threadNameSidebar.value.trim() || undefined })
+      ...(this.currentThreadId ? {} : { title: this.threadNameSidebar.value.trim() })
     };
 
-    let result, threadId, logs;
+    let json;
     try {
-      const res = await fetch(`${API_BASE}/api/prompt`, {
-        method: 'POST',
-        headers: { 'Content-Type':'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if (!res.ok) throw new Error(await res.text());
-      ({ result, threadId, logs } = await res.json());
+      json = await sendPrompt(payload);
     } catch (err) {
       console.error('sendMessage error:', err);
-      placeholder.wrap.remove();
+      placeholderWrap.remove();
+      typingEl.remove();
       this.input.disabled = this.sendBtn.disabled = false;
       return;
     }
 
-    // 5) Manage thread list & selection
+    const {
+      result,
+      threadId,
+      logs,
+      userMessageId,
+      assistantMessageId
+    } = json;
+
+    userWrap.dataset.msgId = userMessageId;
+    placeholderWrap.dataset.msgId = assistantMessageId;
+
+    placeholderWrap.remove();
+    typingEl.remove();
+
+    const ts = new Date().toLocaleString();
+    const text = typeof result === 'string'
+      ? result
+      : (Array.isArray(result.choices)
+          ? result.choices.map(c => c.message?.content || c.text).join('\n')
+          : extractContent(result.content || []));
+    const { wrap: assistantWrap } = this.appendMessage('assistant', text, ts);
+    assistantWrap.dataset.msgId = assistantMessageId;
+    this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
+
+    this.input.disabled = this.sendBtn.disabled = false;
+    this.input.focus();
+
     if (!this.threads.find(t => t.id === threadId)) {
-      this.threads.push({ id: threadId, title: this.threadNameSidebar.value.trim() || threadId });
+      this.threads.push({
+        id: threadId,
+        title: this.threadNameSidebar.value.trim() || threadId
+      });
       this._renderThreadList();
     }
     this.currentThreadId = threadId;
     this._highlightSelectedThread();
-
-    // 6) Remove the “…” placeholder
-    placeholder.wrap.remove();
-
-    // 7) Render each tool call as two bubbles
-    const ts = new Date().toLocaleString();
-    if (Array.isArray(logs) && logs.length) {
-      for (let i = 0; i < logs.length; i += 2) {
-        const callLog   = logs[i];
-        const resultLog = logs[i+1];
-
-        // Bubble for the function call
-        const callText = `🔧 call ${callLog.name}(${JSON.stringify(callLog.arguments)})`;
-        this.appendMessage('assistant', callText, ts);
-
-        // Bubble for the function result
-        const resText = `📥 result ${callLog.name}: ${resultLog.result}`;
-        this.appendMessage('assistant', resText, ts);
-      }
-    }
-
-    // 8) Finally, render the actual assistant reply
-    let text = '';
-    if (typeof result === 'string') {
-      text = result;
-    } else if (Array.isArray(result.choices)) {
-      text = result.choices.map(c => c.message?.content || c.text || '').join('\n');
-    } else if (result?.content) {
-      text = extractContent(result.content);
-    } else {
-      text = JSON.stringify(result, null, 2);
-    }
-    this.appendMessage('assistant', text, ts);
-    this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
-
-    // 9) Re-enable input
-    this.input.disabled = this.sendBtn.disabled = false;
-    this.input.focus();
+    this._updateThreadNameSidebarVisibility();
+    const th = this.threads.find(t => t.id === threadId);
+    this.chatTitleEl.textContent = th.title || 'Untitled Chat';
   }
 
   async _showFileTree() {
-    const res = await fetch(`${API_BASE}/api/files`);
-    if (!res.ok) return;
-    const tree = await res.json();
-    const modal = document.createElement('div');
-    modal.id = 'fileModal';
-    modal.innerHTML = '<button class="close">✖</button>';
-    modal.querySelector('.close').onclick = () => modal.remove();
+    try {
+      const tree = await fetchFilesTree();
+      const modal = document.createElement('div');
+      modal.id = 'fileModal';
+      modal.innerHTML = '<button class="close">✖</button>';
+      modal.querySelector('.close').onclick = () => modal.remove();
 
-    function render(node) {
-      const li = document.createElement('li');
-      if (Array.isArray(node.children)) {
-        const span = document.createElement('span');
-        span.textContent = node.name;
-        span.classList.add('file-node', 'collapsed');
-        span.onclick = () => span.classList.toggle('collapsed');
-        li.append(span);
-        const ul = document.createElement('ul');
-        node.children.forEach(ch => ul.append(render(ch)));
-        li.append(ul);
-      } else {
-        const span = document.createElement('span');
-        span.textContent = node.name;
-        span.classList.add('file-leaf');
-        const ext = node.name.split('.').pop();
-        if (ext) span.classList.add(ext.toLowerCase());
-        li.append(span);
+      function render(node) {
+        const li = document.createElement('li');
+        if (Array.isArray(node.children)) {
+          const span = document.createElement('span');
+          span.textContent = node.name;
+          span.classList.add('file-node', 'collapsed');
+          span.onclick = () => span.classList.toggle('collapsed');
+          li.append(span);
+          const ul = document.createElement('ul');
+          node.children.forEach(ch => ul.append(render(ch)));
+          li.append(ul);
+        } else {
+          const span = document.createElement('span');
+          span.textContent = node.name;
+          span.classList.add('file-leaf');
+          const ext = node.name.split('.').pop();
+          if (ext) span.classList.add(ext.toLowerCase());
+          li.append(span);
+        }
+        return li;
       }
-      return li;
-    }
 
-    const ul = document.createElement('ul');
-    tree.forEach(n => ul.append(render(n)));
-    modal.append(ul);
-    document.body.append(modal);
+      const ul = document.createElement('ul');
+      tree.forEach(n => ul.append(render(n)));
+      modal.append(ul);
+      document.body.append(modal);
+    } catch (err) {
+      console.error(err);
+    }
   }
 }
 

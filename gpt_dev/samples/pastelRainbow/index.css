@@ -1,0 +1,16 @@
+/* index.css: Sinewave Rainbow Animation Styles */
+
+body {
+    margin: 0;
+    padding: 0;
+    background: #f8fafc; /* nice subtle offwhite backdrop under the pastel rainbow */
+    min-height: 100vh;
+    overflow: hidden;
+}
+
+#rainbow-sinewave-canvas {
+    /* sizing and positioning mostly handled in JS as 100vw/100vh */
+    display: block;
+    pointer-events: none; /* Prevent interference with UI */
+    z-index: -1;
+}

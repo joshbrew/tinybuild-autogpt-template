@@ -1,6 +1,5 @@
 // /backend/serverUtil.js
 import dotenv from 'dotenv';
-import * as http from 'http';
 dotenv.config();
 
 /**

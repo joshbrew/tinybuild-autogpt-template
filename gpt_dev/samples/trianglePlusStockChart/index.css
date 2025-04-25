@@ -1,0 +1,83 @@
+/* index.css: Clean layout, no CSS gradient on canvas */
+body {
+    margin: 0;
+    padding: 0;
+    min-height: 100vh;
+    overflow: hidden;
+    background: #050404;
+}
+#rainbow-sinewave-canvas {
+    display: block;
+    pointer-events: none;
+    z-index: 2;
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    width: min(80vw, 80vh);
+    height: min(80vw, 80vh);
+    transform: translate(-50%, -50%);
+    margin: 0;
+    clip-path: polygon(0% 100%, 100% 100%, 50% 0%);
+    -webkit-clip-path: polygon(0% 100%, 100% 100%, 50% 0%);
+    background: transparent;
+}
+/* Remove deprecated css-circles-container. Circles will be individually absolutely positioned. */
+.gradient-circle {
+    position: fixed;
+    z-index: 10;
+    border-radius: 50%;
+    background: radial-gradient(circle, #fff 0%, #ffbe0b 20%, #fb5607 40%, #ff006e 60%, #8338ec 75%, #3a86ff 85%, #43ff50 100%);
+    animation: color-wheel 3.5s linear infinite, grow-shrink 4s ease-in-out infinite;
+    box-shadow: 0 2px 22px 0 #2223, 0 0 0 6px #fff2;
+    overflow: visible;
+    border: 2px solid #242424;
+    filter: hue-rotate(0deg);
+}
+.gradient-circle.top-left {
+    left: 1vw;
+    top: 1.5vh;
+    width: 86px;
+    height: 86px;
+    animation-delay: 0.05s, 0.0s;
+}
+.gradient-circle.top-right {
+    right: 1vw;
+    top: 2vh;
+    width: 72px;
+    height: 72px;
+    animation-delay: 1.0s, 1.8s;
+}
+.gradient-circle.bottom-left {
+    left: 2vw;
+    bottom: 2.2vh;
+    width: 58px;
+    height: 58px;
+    animation-delay: 0.6s, 0.9s;
+    filter: blur(1.7px) hue-rotate(180deg) brightness(1.25);
+    opacity: 0.78;
+}
+.gradient-circle.bottom-right {
+    right: 2vw;
+    bottom: 2.0vh;
+    width: 45px;
+    height: 45px;
+    animation-delay: 0.28s, 2.23s;
+    filter: blur(2.8px) hue-rotate(90deg) brightness(1.13) contrast(1.11);
+    opacity: 0.68;
+}
+@keyframes color-wheel {
+    0%   { filter: hue-rotate(0deg); }
+    100% { filter: hue-rotate(360deg); }
+}
+@keyframes grow-shrink {
+    0%    { transform: scale(1) }
+    12%   { transform: scale(1.19) }
+    23%   { transform: scale(0.91) }
+    29%   { transform: scale(1.22) }
+    40%   { transform: scale(0.84) }
+    52%   { transform: scale(1.03) }
+    60%   { transform: scale(1.34) }
+    74%   { transform: scale(0.92) }
+    87%   { transform: scale(1.09) }
+    100%  { transform: scale(1) }
+}

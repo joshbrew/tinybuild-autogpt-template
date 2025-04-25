@@ -71,6 +71,7 @@ Add build:true for build-only, add serve:true for serve-only, or set bundle or s
 ## TODO:
 
 - Improve chat frontend further. More options and guides etc.
+- Stop run, revert code, uhh
 - - e.g. reset the repository to blank, or clone to a new folder for branching.
 - Finish testing fetch for reporting console logs to gpt via tool call.
 - Explore run failures further. They seem fixed on our end.

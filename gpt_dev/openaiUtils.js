@@ -4,7 +4,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import OpenAI from 'openai';
 import { exec } from 'child_process';
-import {sseChannel} from './serverUtil.js'
+import {sseChannel, pendingConsoleHistory} from './serverUtil.js'
 import dotenv from 'dotenv';
 dotenv.config();
 

@@ -4,6 +4,9 @@ import path from 'path';
 import fs from 'fs/promises';
 import OpenAI from 'openai';
 import { exec } from 'child_process';
+import {sseChannel} from './serverUtil.js'
+import dotenv from 'dotenv';
+dotenv.config();
 
 // ─── Runtime config ─────────────────────────────────────────────────
 export const openai = new OpenAI({
@@ -240,31 +243,20 @@ export const functionSchemas = [
         properties:{ new_prompt:{ type:'string' } },
         required:['new_prompt']
       }
-    }//,
-    // {
-    //   name: 'get_console_history',
-    //   description: 'Return the browser’s console.log/info/warn/error history as JSON',
-    //   parameters: {
-    //     type: 'object',
-    //     properties: { },
-    //     required: []
-    //   }
-    // }
+    },
+    {
+      name: 'get_console_history',
+      description: 'Ask the front-end for window.__consoleHistory__; returns an array of {level,timestamp,args}',
+      parameters: {
+        type: 'object',
+        properties: { },
+        required: []
+      }
+    }
 ];
   
 export const tools = functionSchemas.map(fn => ({ type:'function', function:fn }));
 
-// ─── Rate Limiting ───────────────────────────────────────────────────
-const RATE_LIMIT_INTERVAL_MS = 500; // Minimum interval between OpenAI API calls (500ms = 120 RPM)
-let lastApiCallTime = 0;
-async function rateLimit() {
-  const now = Date.now();
-  const elapsed = now - lastApiCallTime;
-  if (elapsed < RATE_LIMIT_INTERVAL_MS) {
-    await new Promise(r => setTimeout(r, RATE_LIMIT_INTERVAL_MS - elapsed));
-  }
-  lastApiCallTime = Date.now();
-}
 
 // ─── Tool‐calling runner ───────────────────────────────────────────────
 export async function runToolCalls(toolCalls) {
@@ -380,13 +372,30 @@ export async function runToolCalls(toolCalls) {
         });
         break;
       }
-      case 'reprompt_self':
+      case 'reprompt_self': {
         selfPrompt = args.new_prompt;
         result = 'Scheduled self-prompt';
         break;
-      // get_console_history would go here...
-
-
+      }
+      case 'get_console_history': {
+        // 1) create a request id and broadcast SSE
+        const id = Math.random()*1000000000000000;
+        sseChannel.broadcast(JSON.stringify({ type:'request_console_history', id }), 'console');
+      
+        // 2) wait for POST /api/console_history to resolve
+        const history = await new Promise((resolve, reject) => {
+          // keep resolver so the HTTP endpoint can call it
+          pendingConsoleHistory.set(id, resolve);
+          // 15-s timeout to avoid hanging forever
+          setTimeout(() => {
+            pendingConsoleHistory.delete(id);
+            reject(new Error('console history timeout'));
+          }, 15_000);
+        });
+      
+        result = JSON.stringify(history);
+        break;
+      }
     }
 
     fnLogs.push({ type:'function_call', name, arguments:args });
@@ -401,9 +410,21 @@ export async function runToolCalls(toolCalls) {
     if(l?.type === 'function_call') { 
       console.log("Assistant called", l.name);
     }
-  })
+  });
 
   return { fnLogs, follow, selfPrompt };
+}
+
+// ─── Rate Limiting ───────────────────────────────────────────────────
+const RATE_LIMIT_INTERVAL_MS = 500; // Minimum interval between OpenAI API calls (500ms = 120 RPM)
+let lastApiCallTime = 0;
+async function rateLimit() {
+  const now = Date.now();
+  const elapsed = now - lastApiCallTime;
+  if (elapsed < RATE_LIMIT_INTERVAL_MS) {
+    await new Promise(r => setTimeout(r, RATE_LIMIT_INTERVAL_MS - elapsed));
+  }
+  lastApiCallTime = Date.now();
 }
 
 // ─── Thread & run helpers ────────────────────────────────────────────

@@ -203,6 +203,62 @@ button:hover {
 }
 
 /* ───────────────────────────────────────────────────────────
+   EDIT MODAL (same look & feel as confirmModal)
+─────────────────────────────────────────────────────────── */
+#editModal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 1001;
+}
+#editModal.visible {
+  display: flex;
+}
+#editModal .modal-content {
+  background: #1f2430;
+  color: #eee;
+  padding: 1.5rem;
+  border-radius: 8px;
+  max-width: 500px;
+  width: 90%;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+}
+#editModal .modal-textarea {
+  width: 100%;
+  height: 120px;
+  margin-bottom: 1rem;
+  padding: 0.5rem;
+  background: #2a2e3b;
+  border: 1px solid #666;
+  border-radius: 4px;
+  color: #eee;
+  resize: vertical;
+}
+#editModal .modal-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+#editModal .btn-cancel,
+#editModal .btn-ok {
+  padding: 0.5rem 1rem;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+}
+#editModal .btn-cancel {
+  background: #444;
+  color: #ddd;
+}
+#editModal .btn-ok {
+  background: #4caf50;
+  color: #fff;
+}
+
+/* ───────────────────────────────────────────────────────────
    CHAT HEADER
 ─────────────────────────────────────────────────────────── */
 .gpt-chat-header {

@@ -27,11 +27,13 @@
     "esbuild"
   ],
   "dependencies": {
-    "dotenv": "*",
     "openai": "*"
   },
   "devDependencies": {
-    "concurrently":"~9.1.2"
+    "better-sse": "^0.14.1",
+    "concurrently": "*",
+    "dotenv": "*",
+    "ws": "*"
   },
   "nodemonConfig": {
     "env": {

@@ -1,61 +1,11 @@
 import './gpt_dev.css';
-const API_BASE = 'http://localhost:3000';
 
-// ───────────── Network helpers ─────────────
-
-async function fetchThreads() {
-  const res = await fetch(`${API_BASE}/api/threads`);
-  if (!res.ok) throw new Error('Failed to load threads');
-  return res.json();
-}
-
-async function fetchThreadById(id) {
-  const res = await fetch(`${API_BASE}/api/threads/${encodeURIComponent(id)}`);
-  if (!res.ok) throw new Error(`Failed to load thread ${id}`);
-  return res.json();
-}
-
-async function deleteThreadById(id) {
-  return fetch(`${API_BASE}/api/threads/${encodeURIComponent(id)}`, {
-    method: 'DELETE'
-  });
-}
-
-async function sendPrompt(payload) {
-  const res = await fetch(`${API_BASE}/api/prompt`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json();
-}
-
-async function editMessage(threadId, msgId, contentPayload) {
-  return fetch(
-    `${API_BASE}/api/threads/${encodeURIComponent(threadId)}/messages/${encodeURIComponent(msgId)}`,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(contentPayload)
-    }
-  );
-}
-
-async function deleteMessageById(threadId, msgId) {
-  return fetch(
-    `${API_BASE}/api/threads/${encodeURIComponent(threadId)}/messages/${encodeURIComponent(msgId)}`,
-    { method: 'DELETE' }
-  );
-}
-
-async function fetchFilesTree() {
-  const res = await fetch(`${API_BASE}/api/files`);
-  if (!res.ok) throw new Error('Failed to load files');
-  return res.json();
-}
-
-// ───────────── capture console (limit to last 100 entries) ─────────────
+import { 
+  fetchThreads, fetchThreadById, 
+  deleteThreadById, sendPrompt, 
+  editMessage, deleteMessageById, 
+  fetchFilesTree, API_BASE
+} from './frontendUtil';
 
 window.__consoleHistory__ = [];
 ['log', 'info', 'warn', 'error'].forEach(level => {
@@ -158,40 +108,19 @@ class GptChat extends HTMLElement {
     });
 
     this._loadThreads();
-  }
 
-  _ensureConfirmModal() {
-    if (document.getElementById('confirmModal')) return;
-    const modal = document.createElement('div');
-    modal.id = 'confirmModal';
-    modal.innerHTML = `
-      <div class="modal-content">
-        <p class="modal-message"></p>
-        <div class="modal-buttons">
-          <button class="btn-cancel">Cancel</button>
-          <button class="btn-ok">OK</button>
-        </div>
-      </div>
-    `;
-    modal.addEventListener('click', e => {
-      if (e.target === modal) modal.classList.remove('visible');
+        
+    this.es = new EventSource(API_BASE+'/events');
+    this.es.addEventListener('console', e => {
+      const { id } = JSON.parse(e.data);
+      // send the console history back
+      fetch(API_BASE+'/api/console_history', {
+        method: 'POST',
+        headers: { 'Content-Type':'application/json' },
+        body: JSON.stringify({ id, history: window.__consoleHistory__ })
+      });
     });
-    modal.querySelector('.btn-cancel').addEventListener('click', () => {
-      modal._resolve(false);
-      modal.classList.remove('visible');
-    });
-    modal.querySelector('.btn-ok').addEventListener('click', () => {
-      modal._resolve(true);
-      modal.classList.remove('visible');
-    });
-    document.body.append(modal);
-  }
 
-  _confirm(message) {
-    const modal = document.getElementById('confirmModal');
-    modal.querySelector('.modal-message').textContent = message;
-    modal.classList.add('visible');
-    return new Promise(resolve => (modal._resolve = resolve));
   }
 
   _updateControls() {
@@ -283,6 +212,7 @@ class GptChat extends HTMLElement {
     this._renderThreadList();
     this._updateThreadNameSidebarVisibility();
     this._updateControls();
+    this._ensureEditModal();
 
     try {
       const { title, messages } = await fetchThreadById(id);
@@ -306,20 +236,151 @@ class GptChat extends HTMLElement {
     this.chatMessages.innerHTML = '';
   }
 
+  // ───────────── Confirm Modal ─────────────
+  _ensureConfirmModal() {
+    if (document.getElementById('confirmModal')) return;
+    const modal = document.createElement('div');
+    modal.id = 'confirmModal';
+    modal.innerHTML = `
+      <div class="modal-content">
+        <p class="modal-message"></p>
+        <div class="modal-buttons">
+          <button class="btn-cancel">Cancel</button>
+          <button class="btn-ok">OK</button>
+        </div>
+      </div>
+    `;
+    modal.addEventListener('click', e => {
+      if (e.target === modal) modal.classList.remove('visible');
+    });
+    modal.querySelector('.btn-cancel').addEventListener('click', () => {
+      modal._resolve(false);
+      modal.classList.remove('visible');
+    });
+    modal.querySelector('.btn-ok').addEventListener('click', () => {
+      modal._resolve(true);
+      modal.classList.remove('visible');
+    });
+    document.body.appendChild(modal);
+  }
+
+  _confirm(message) {
+    const modal = document.getElementById('confirmModal');
+    modal.querySelector('.modal-message').textContent = message;
+    modal.classList.add('visible');
+    return new Promise(resolve => (modal._resolve = resolve));
+  }
+
+  // ───────────── Edit Modal ─────────────
+  _ensureEditModal() {
+    let modal = document.getElementById('editModal');
+    if (modal) return modal;
+
+    modal = document.createElement('div');
+    modal.id = 'editModal';
+    modal.innerHTML = `
+      <div class="modal-content">
+        <textarea class="modal-textarea"></textarea>
+        <div class="modal-buttons">
+          <button class="btn-cancel">Cancel</button>
+          <button class="btn-ok">OK</button>
+        </div>
+      </div>
+    `;
+    modal.addEventListener('click', e => {
+      if (e.target === modal) modal.classList.remove('visible');
+    });
+
+    const textarea = modal.querySelector('.modal-textarea');
+    modal.querySelector('.btn-cancel').addEventListener('click', () => {
+      modal._resolve(null);
+      modal.classList.remove('visible');
+    });
+    modal.querySelector('.btn-ok').addEventListener('click', () => {
+      modal._resolve(textarea.value);
+      modal.classList.remove('visible');
+    });
+
+    document.body.appendChild(modal);
+    return modal;
+  }
+
+  _edit(initialText = '') {
+    // always have the modal in the DOM
+    const modal = document.getElementById('editModal') || this._ensureEditModal();
+    const textarea = modal.querySelector('.modal-textarea');
+    textarea.value = initialText;
+    modal.classList.add('visible');
+    textarea.focus();
+    return new Promise(resolve => (modal._resolve = resolve));
+  }
+
+  a// ───────────── Message Rendering ─────────────
   appendMessage(role, text, ts) {
     const wrap = document.createElement('div');
     wrap.className = `gpt-chat-message ${role}`;
 
     const meta = document.createElement('div');
     meta.className = 'meta';
-    meta.textContent = `${role === 'user' ? 'You' : 
-      role === 'tool' ? '🔧 Tool' : 'GPT'} • ${ts}`;
+    meta.textContent = `${
+      role === 'user' ? 'You' :
+      role === 'tool' ? '🔧 Tool' :
+      'GPT'
+    } • ${ts}`;
 
     const content = document.createElement('div');
     content.className = 'content';
     content.textContent = text;
 
     wrap.append(meta, content);
+
+    // only allow edits/deletes on user‐sent messages
+    if (role === 'user') {
+      const actions = document.createElement('div');
+      actions.className = 'msg-actions';
+
+      // edit button
+      const editBtn = document.createElement('button');
+      editBtn.className = 'edit-msg-btn';
+      editBtn.textContent = '✏️';
+      editBtn.title = 'Edit message';
+      editBtn.addEventListener('click', async e => {
+        e.stopPropagation();
+        const msgId = wrap.dataset.msgId;
+        if (!msgId) return;
+        const newText = await this._edit(content.textContent);
+        if (newText != null && newText.trim() !== '') {
+          try {
+            await editMessage(this.currentThreadId, msgId, { content: newText });
+            content.textContent = newText;
+          } catch (err) {
+            // reuse confirm modal for errors
+            await this._confirm('Error editing: ' + err.message);
+          }
+        }
+      });
+
+      // delete button
+      const deleteBtn = document.createElement('button');
+      deleteBtn.className = 'delete-msg-btn';
+      deleteBtn.textContent = '🗑️';
+      deleteBtn.title = 'Delete message';
+      deleteBtn.addEventListener('click', async e => {
+        e.stopPropagation();
+        if (!wrap.dataset.msgId) return;
+        if (!await this._confirm('Delete this message?')) return;
+        try {
+          await deleteMessageById(this.currentThreadId, wrap.dataset.msgId);
+          wrap.remove();
+        } catch (err) {
+          await this._confirm('Error deleting: ' + err.message);
+        }
+      });
+
+      actions.append(editBtn, deleteBtn);
+      wrap.append(actions);
+    }
+
     this.chatMessages.appendChild(wrap);
     return { wrap };
   }
@@ -460,28 +521,42 @@ class GptChat extends HTMLElement {
   async _showFileTree() {
     try {
       const tree = await fetchFilesTree();
+
       const modal = document.createElement('div');
       modal.id = 'fileModal';
       modal.innerHTML = '<button class="close">✖</button>';
       modal.querySelector('.close').onclick = () => modal.remove();
 
+      // ───────────── recursive renderer ─────────────
       function render(node) {
         const li = document.createElement('li');
+
+        // ── FOLDER ──
         if (Array.isArray(node.children)) {
           const span = document.createElement('span');
           span.textContent = node.name;
-          span.classList.add('file-node', 'collapsed');
+          span.classList.add('file-node', 'collapsed');   // ← restored
           span.onclick = () => span.classList.toggle('collapsed');
           li.append(span);
+
           const ul = document.createElement('ul');
-          node.children.forEach(ch => ul.append(render(ch)));
+          node.children.forEach(child => ul.append(render(child)));
           li.append(ul);
-        } else {
+        }
+
+        // ── FILE ──
+        else {
           const span = document.createElement('span');
           span.textContent = node.name;
-          span.classList.add('file-leaf');
+          span.classList.add('file-leaf');                // ← restored
+
+          // add extension-specific class (.js, .css, .html, …) for colour-coding
+          const ext = node.name.match(/\.([^.]+)$/);
+          if (ext) span.classList.add(ext[1]);
+
           li.append(span);
         }
+
         return li;
       }
 

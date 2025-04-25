@@ -1,8 +1,5 @@
-// /gpt_dev/openaiRoutes.js
-import path   from 'path';
+import path from 'path';
 import * as fsp from 'fs/promises';
-import { getRequestBody, setHeaders } from './serverUtil.js';
-
 import {
   handlePrompt,
   runToolCalls,
@@ -11,308 +8,286 @@ import {
   openai,
   SAVED_DIR,
 } from './openaiUtils.js';
+import {pendingConsoleHistory } from './serverUtil.js'
+// --- Handlers ---
+async function listThreads(ctx) {
+  const files = (await fsp.readdir(SAVED_DIR))
+    .filter(f => f.endsWith('.txt'))
+    .map(f => f.slice(0, -4));
 
+  const threads = await Promise.all(
+    files.map(async id => {
+      const convo = await loadConversation(path.join(SAVED_DIR, id + '.txt'));
+      return { id, title: convo.title || id, openaiThreadId: convo.openaiThreadId };
+    })
+  );
 
+  await ctx.json(200, threads);
+}
 
-/* ─── routes ───────────────────────────────────────────────────────── */
-export const apiRoutes = {
+async function getThreadInfo(ctx) {
+  const { id } = ctx.params;
+  try {
+    const convo = await loadConversation(path.join(SAVED_DIR, `${id}.txt`));
+    await ctx.json(200, {
+      id,
+      title: convo.title,
+      openaiThreadId: convo.openaiThreadId,
+      messages: convo.messages
+    });
+  } catch {
+    await ctx.json(404, { error: 'Thread not found' });
+  }
+}
 
-  /* ---------- thread list with titles ---------- */
-  '/api/threads': {
-    GET: async (_, res) => {
-      const files = (await fsp.readdir(SAVED_DIR))
-        .filter(f => f.endsWith('.txt'))
-        .map(f => f.slice(0, -4));
+async function renameThread(ctx) {
+  const { id, title } = await ctx.body();
+  if (!title || typeof title !== 'string') return ctx.json(400, { error: 'Missing or invalid title' });
 
-      const threads = await Promise.all(
-        files.map(async localId => {
-          const convo = await loadConversation(path.join(SAVED_DIR, localId + '.txt'));
-          return {
-            id:               localId,
-            title:            convo.title || localId,
-            openaiThreadId:   convo.openaiThreadId   // ← include this
-          };
-        })
-      );
+  const filePath = path.join(SAVED_DIR, `${id}.txt`);
+  let convo;
+  try {
+    convo = await loadConversation(filePath);
+  } catch {
+    convo = { messages: [], openaiThreadId: null, title: '' };
+  }
 
-      setHeaders(res, 200, 'application/json');
-      res.end(JSON.stringify(threads));
-    }
-  },
+  convo.title = title;
+  await saveConversation(filePath, convo);
 
-  /* ---------- load one convo (title + messages) ---------- */
-  '/api/threads/:id': {
-    GET: async (req, res) => {
-      const localId = req.params.id;
-      const fp = path.join(SAVED_DIR, `${localId}.txt`);
+  if (convo.openaiThreadId) {
+    await openai.beta.threads.update(convo.openaiThreadId, { metadata: { title } });
+  }
 
-      try {
-        const convo = await loadConversation(fp);
-        setHeaders(res, 200, 'application/json');
-        res.end(JSON.stringify({
-          id:               localId,           // ← include this too
-          title:            convo.title,
-          openaiThreadId:   convo.openaiThreadId,
-          messages:         convo.messages
-        }));
-      } catch {
-        setHeaders(res, 404, 'application/json');
-        res.end('{"error":"Thread not found"}');
-      }
-    }
-  },
+  await ctx.json(200, { id, title });
+}
 
-  /* ---------- rename a convo title ---------- */
-  '/api/threads/:id/title': {
-    POST: async (req, res) => {
-      const { title, id } = JSON.parse(await getRequestBody(req));
-      if (!title || typeof title !== 'string') {
-        setHeaders(res,400,'application/json');
-        return res.end(JSON.stringify({ error:'Missing or invalid title' }));
-      }
+// Delete both local file and remote thread
+async function deleteThread(ctx) {
+  const { id } = ctx.params;
+  const filePath = path.join(SAVED_DIR, `${id}.txt`);
+  let convo;
 
-      const filePath = path.join(SAVED_DIR, `${id}.txt`);
-      let convo;
-      try { convo = await loadConversation(oldPath); }
-      catch { convo = { messages:[], openaiThreadId:null, title:'' }; }
+  try {
+    convo = await loadConversation(filePath);
+  } catch {
+    return ctx.json(404, { error: 'Thread not found' });
+  }
 
-      convo.title = title;
-      await saveConversation(filePath, convo);
-
-      if (convo.openaiThreadId) {
-        await openai.beta.threads.update(convo.openaiThreadId, { metadata:{ title } });
-      }
-
-      setHeaders(res,200,'application/json');
-      res.end(JSON.stringify({ id, title }));
-    }
-  },
-
-  /* -- Thread management -- */
-  '/api/threads/:thread_id': {
-    GET: async (req,res) => {
-      const localId = req.params.thread_id;
-      const convo   = await loadConversation(path.join(SAVED_DIR, `${localId}.txt`));
-      if (!convo.openaiThreadId) {
-        setHeaders(res,404,'application/json');
-        return res.end('{"error":"No OpenAI thread mapped"}');
-      }
-      const thread = await openai.beta.threads.retrieve(convo.openaiThreadId);
-      setHeaders(res,200,'application/json');
-      res.end(JSON.stringify(thread));
-    },
-    POST: async (req,res) => {
-      const localId = req.params.thread_id;
-      const convo   = await loadConversation(path.join(SAVED_DIR, `${localId}.txt`));
-      if (!convo.openaiThreadId) {
-        setHeaders(res,404,'application/json');
-        return res.end('{"error":"No OpenAI thread mapped"}');
-      }
-      const body = JSON.parse(await getRequestBody(req));
-      const updated = await openai.beta.threads.update(convo.openaiThreadId, {
-        metadata:       body.metadata,
-        tool_resources: body.tool_resources ?? null
-      });
-      setHeaders(res,200,'application/json');
-      res.end(JSON.stringify(updated));
-    },
-    DELETE: async (req, res) => {
-      const localId = req.params.thread_id;
-      const filePath = path.join(SAVED_DIR, `${localId}.txt`);
-
-      // 1) Load the local conversation file (404 if missing)
-      let convo;
-      try {
-        convo = await loadConversation(filePath);
-      } catch (err) {
-        setHeaders(res, 404, 'application/json');
-        return res.end(JSON.stringify({ error: 'Thread not found' }));
-      }
-
-      // 2) Attempt to delete the remote thread, but ignore a 404 if it's already gone
-      if (convo.openaiThreadId) {
-        try {
-          await openai.beta.threads.del(convo.openaiThreadId);
-        } catch (err) {
-          if (err.status !== 404) {
-            // If it's not “not found”, re-throw so the client sees the failure
-            throw err;
-          }
-          // otherwise, swallow the 404 and proceed
-        }
-      }
-
-      // 3) Delete the local file—ignore errors here, since at worst it’s already gone
-      await fsp.unlink(filePath).catch(() => {});
-
-      // 4) Return success
-      setHeaders(res, 200, 'application/json');
-      res.end(JSON.stringify({ success: true }));
-    }
-  },
-
-  /* -- Message management -- */
-  '/api/threads/:thread_id/messages': {
-    GET: async (req,res) => {
-      const localId = req.params.thread_id;
-      const convo   = await loadConversation(path.join(SAVED_DIR, `${localId}.txt`));
-      if (!convo.openaiThreadId) {
-        setHeaders(res,404,'application/json');
-        return res.end('{"error":"No OpenAI thread mapped"}');
-      }
-      const url  = new URL(req.url, `http://${req.headers.host}`);
-      const list = await openai.beta.threads.messages.list(convo.openaiThreadId, {
-        limit:  Number(url.searchParams.get('limit') || 20),
-        order:  url.searchParams.get('order') || 'desc',
-        after:  url.searchParams.get('after')  || undefined,
-        before: url.searchParams.get('before') || undefined
-      });
-      setHeaders(res,200,'application/json');
-      res.end(JSON.stringify(list));
-    },
-    POST: async (req,res) => {
-      const localId = req.params.thread_id;
-      let convo     = await loadConversation(path.join(SAVED_DIR, `${localId}.txt`));
-      if (!convo.openaiThreadId) {
-        setHeaders(res,404,'application/json');
-        return res.end('{"error":"No OpenAI thread mapped"}');
-      }
-
-      const body = JSON.parse(await getRequestBody(req));
-      // ensure each content item has a type
-      const content = (body.content || []).map(c => ({
-        type: c.type || 'text',
-        text: c.text
-      }));
-
-      // create message on OpenAI
-      const msg = await openai.beta.threads.messages.create(convo.openaiThreadId, {
-        role:        body.role,
-        content,
-        attachments: body.attachments,
-        metadata:    body.metadata
-      });
-
-      // save it locally
-      convo.messages.push(msg);
-      await saveConversation(path.join(SAVED_DIR, `${localId}.txt`), convo);
-
-      setHeaders(res,201,'application/json');
-      res.end(JSON.stringify(msg));
-    }
-  },
-
-  '/api/threads/:thread_id/messages/:message_id': {
-    GET: async (req,res) => {
-      const { thread_id: localId, message_id: mid } = req.params;
-      const convo = await loadConversation(path.join(SAVED_DIR, `${localId}.txt`));
-      if (!convo.openaiThreadId) {
-        setHeaders(res,404,'application/json');
-        return res.end('{"error":"No OpenAI thread mapped"}');
-      }
-      const msg = await openai.beta.threads.messages.retrieve(convo.openaiThreadId, mid);
-      setHeaders(res,200,'application/json');
-      res.end(JSON.stringify(msg));
-    },
-    POST: async (req,res) => {
-      const { thread_id: localId, message_id: mid } = req.params;
-      let convo = await loadConversation(path.join(SAVED_DIR, `${localId}.txt`));
-      if (!convo.openaiThreadId) {
-        setHeaders(res,404,'application/json');
-        return res.end('{"error":"No OpenAI thread mapped"}');
-      }
-
-      const body = JSON.parse(await getRequestBody(req));
-      const content = (body.content || []).map(c => ({
-        type: c.type || 'text',
-        text: c.text
-      }));
-
-      const updated = await openai.beta.threads.messages.update(
-        convo.openaiThreadId,
-        mid,
-        { content, metadata: body.metadata }
-      );
-
-      // overwrite in local save
-      convo.messages = convo.messages.map(m => m.id === mid ? updated : m);
-      await saveConversation(path.join(SAVED_DIR, `${localId}.txt`), convo);
-
-      setHeaders(res,200,'application/json');
-      res.end(JSON.stringify(updated));
-    },
-    DELETE: async (req,res) => {
-      const { thread_id: localId, message_id: mid } = req.params;
-      let convo = await loadConversation(path.join(SAVED_DIR, `${localId}.txt`));
-      if (!convo.openaiThreadId) {
-        setHeaders(res,404,'application/json');
-        return res.end('{"error":"No OpenAI thread mapped"}');
-      }
-
-      // delete on OpenAI
-      const del = await openai.beta.threads.messages.del(convo.openaiThreadId, mid);
-      // remove locally
-      convo.messages = convo.messages.filter(m => m.id !== mid);
-      await saveConversation(path.join(SAVED_DIR, `${localId}.txt`), convo);
-
-      setHeaders(res,200,'application/json');
-      res.end(JSON.stringify(del));
-    }
-  },
-
-  '/api/files': {
-    GET: async (req,res)=>{
-      const url = new URL(req.url,`http://${req.headers.host}`);
-      const params = {
-        folder:            '.',
-        recursive:         url.searchParams.get('recursive')!=='false',
-        skip_node_modules: url.searchParams.get('skip_node_modules')!=='false',
-        deep_node_modules: url.searchParams.get('deep_node_modules')==='true'
-      };
-      const { fnLogs } = await runToolCalls([{
-        id:        'files',
-        name:      'list_directory',
-        function:  {},
-        arguments: JSON.stringify(params)
-      }]);
-      setHeaders(res,200,'application/json');
-      res.end(fnLogs.at(-1).result);
-    }
-  },
-
-  
-  '/api/prompt': {
-    POST: async (req, res, { savedDir }) => {
-      console.debug('[openaiRoutes] /api/prompt POST');
-      try {
-        const body = JSON.parse(await getRequestBody(req));
-        const {
-          logs,
-          result,
-          threadId,
-          openaiThreadId,
-          userMessageId,
-          assistantMessageId
-        } = await handlePrompt(body, savedDir);
-        
-        setHeaders(res, 200, 'application/json');
-        res.end(JSON.stringify({
-          logs,
-          result,
-          threadId,
-          openaiThreadId,
-          userMessageId,
-          assistantMessageId
-        }));
-
-      } catch (err) {
-        console.error('[openaiRoutes] /api/prompt error:', err);
-        const code = err.message === 'Missing prompt' ? 400 : 500;
-        setHeaders(res, code, 'application/json');
-        res.end(JSON.stringify({ error: err.message }));
-      }
+  if (convo.openaiThreadId) {
+    try {
+      await openai.beta.threads.del(convo.openaiThreadId);
+    } catch (err) {
+      if (err.status !== 404) throw err;
     }
   }
 
+  await fsp.unlink(filePath).catch(() => {});
+  await ctx.json(200, { success: true });
+}
 
+// Remote thread management
+async function retrieveRemoteThread(ctx) {
+  const { thread_id } = ctx.params;
+  try {
+    const convo = await loadConversation(path.join(SAVED_DIR, `${thread_id}.txt`));
+    if (!convo.openaiThreadId) {
+      return ctx.json(404, { error: 'No OpenAI thread mapped' });
+    }
+    const thread = await openai.beta.threads.retrieve(convo.openaiThreadId);
+    await ctx.json(200, thread);
+  } catch (err) {
+    await ctx.json(500, { error: err.message });
+  }
+}
+
+async function updateRemoteThread(ctx) {
+  const { thread_id } = ctx.params;
+  const { metadata, tool_resources } = await ctx.body();
+
+  try {
+    const convo = await loadConversation(path.join(SAVED_DIR, `${thread_id}.txt`));
+    if (!convo.openaiThreadId) {
+      return ctx.json(404, { error: 'No OpenAI thread mapped' });
+    }
+    const updated = await openai.beta.threads.update(convo.openaiThreadId, { metadata, tool_resources });
+    await ctx.json(200, updated);
+  } catch (err) {
+    await ctx.json(500, { error: err.message });
+  }
+}
+
+async function listMessages(ctx) {
+  const { thread_id } = ctx.params;
+  const convo = await loadConversation(path.join(SAVED_DIR, `${thread_id}.txt`));
+  if (!convo.openaiThreadId) return ctx.json(404, { error: 'No OpenAI thread mapped' });
+
+  const q = ctx.query;
+  const list = await openai.beta.threads.messages.list(convo.openaiThreadId, {
+    limit: Number(q.limit || 20),
+    order: q.order || 'desc',
+    after: q.after,
+    before: q.before
+  });
+
+  await ctx.json(200, list);
+}
+
+async function postMessage(ctx) {
+  const { thread_id } = ctx.params;
+  const convo = await loadConversation(path.join(SAVED_DIR, `${thread_id}.txt`));
+  if (!convo.openaiThreadId) return ctx.json(404, { error: 'No OpenAI thread mapped' });
+
+  const body = ctx.body;
+  const content = (body.content || []).map(c => ({ type: c.type || 'text', text: c.text }));
+  const msg = await openai.beta.threads.messages.create(convo.openaiThreadId, {
+    role: body.role,
+    content,
+    attachments: body.attachments,
+    metadata: body.metadata
+  });
+
+  convo.messages.push(msg);
+  await saveConversation(path.join(SAVED_DIR, `${thread_id}.txt`), convo);
+  await ctx.json(201, msg);
+}
+
+async function getMessage(ctx) {
+  const { thread_id, message_id } = ctx.params;
+  const convo = await loadConversation(path.join(SAVED_DIR, `${thread_id}.txt`));
+  if (!convo.openaiThreadId) return ctx.json(404, { error: 'No OpenAI thread mapped' });
+
+  const msg = await openai.beta.threads.messages.retrieve(convo.openaiThreadId, message_id);
+  await ctx.json(200, msg);
+}
+
+async function updateMessage(ctx) {
+  const { thread_id, message_id } = ctx.params;
+  const filePath = path.join(SAVED_DIR, `${thread_id}.txt`);
+
+  // Load or 404
+  let convo;
+  try {
+    convo = await loadConversation(filePath);
+  } catch {
+    return ctx.json(404, { error: 'Thread not found' });
+  }
+  if (!convo.openaiThreadId) {
+    return ctx.json(404, { error: 'No OpenAI thread mapped' });
+  }
+
+  // Parse body
+  const body = await ctx.body();
+
+  // 1) Build the new content array
+  let newContentArray = [];
+  if (typeof body.content === 'string') {
+    newContentArray = [{ type: 'text', text: body.content }];
+  } else if (Array.isArray(body.content)) {
+    newContentArray = body.content.map(c => ({
+      type: c.type || 'text',
+      text: c.text
+    }));
+  }
+  // (else leave as empty [])
+
+  // 2) Update local convo.messages
+  convo.messages = convo.messages.map(m =>
+    m.id === message_id
+      ? { ...m, content: newContentArray }
+      : m
+  );
+
+  // 3) Persist to disk
+  await saveConversation(filePath, convo);
+
+  // 4) Push metadata-only updates upstream, if provided
+  if (body.metadata) {
+    try {
+      await openai
+        .beta.threads
+        .messages
+        .update(convo.openaiThreadId, message_id, {
+          metadata: body.metadata
+        });
+    } catch (err) {
+      console.warn('Failed to update metadata:', err);
+    }
+  }
+
+  // 5) Return the updated message
+  const updated = convo.messages.find(m => m.id === message_id);
+  return ctx.json(200, updated);
+}
+
+async function deleteMessage(ctx) {
+  const { thread_id, message_id } = ctx.params;
+  const convo = await loadConversation(path.join(SAVED_DIR, `${thread_id}.txt`));
+  if (!convo.openaiThreadId) return ctx.json(404, { error: 'No OpenAI thread mapped' });
+
+  const del = await openai.beta.threads.messages.del(convo.openaiThreadId, message_id);
+  convo.messages = convo.messages.filter(m => m.id !== message_id);
+  await saveConversation(path.join(SAVED_DIR, `${thread_id}.txt`), convo);
+  await ctx.json(200, del);
+}
+
+async function listFiles(ctx) {
+  const params = {
+    folder: ctx.query.folder || '.',
+    recursive: ctx.query.recursive !== 'false',
+    skip_node_modules: ctx.query.skip_node_modules !== 'false',
+    deep_node_modules: ctx.query.deep_node_modules === 'true'
+  };
+  const { fnLogs } = await runToolCalls([{
+    id: 'files',
+    name: 'list_directory',
+    function: {},
+    arguments: JSON.stringify(params)
+  }]);
+
+  await ctx.text(200, fnLogs.at(-1).result);
+}
+
+async function handlePromptRoute(ctx) {
+  try {
+    const body = await ctx.body();
+    const { logs, result, threadId, openaiThreadId, userMessageId, assistantMessageId } =
+      await handlePrompt(body, SAVED_DIR);
+    await ctx.json(200, { logs, result, threadId, openaiThreadId, userMessageId, assistantMessageId });
+  } catch (err) {
+    const code = err.message === 'Missing prompt' ? 400 : 500;
+    await ctx.json(code, { error: err.message });
+  }
+}
+
+async function postConsoleHistory(ctx) {
+  const { id, history } = await ctx.body();
+
+  if (!id || !Array.isArray(history)) {
+    return ctx.json(400, { error: 'Missing id or history[]' });
+  }
+  if (!pendingConsoleHistory.has(id)) {
+    return ctx.json(404, { error: 'id not pending' });
+  }
+
+  // call the awaiting Promise in runToolCalls then clear it
+  pendingConsoleHistory.get(id)(history);
+  pendingConsoleHistory.delete(id);
+
+  // 204 = no content
+  ctx.res.writeHead(204);
+  ctx.res.end();
+}
+
+// --- Route definitions and matchers ---
+export const routesConfig = {
+  '/api/threads': { GET: listThreads },
+  '/api/threads/:id': { GET: getThreadInfo, DELETE: deleteThread },
+  '/api/threads/:id/title': { POST: renameThread },
+  '/api/threads/:thread_id': { GET: retrieveRemoteThread, POST: updateRemoteThread, DELETE: deleteThread },
+  '/api/threads/:thread_id/messages': { GET: listMessages, POST: postMessage },
+  '/api/threads/:thread_id/messages/:message_id': { GET: getMessage, POST: updateMessage, DELETE: deleteMessage },
+  '/api/files': { GET: listFiles },
+  '/api/prompt': { POST: handlePromptRoute },
+  '/api/console_history': { POST: postConsoleHistory }
 };

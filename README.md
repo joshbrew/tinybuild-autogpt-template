@@ -72,9 +72,8 @@ Add build:true for build-only, add serve:true for serve-only, or set bundle or s
 
 - Improve chat frontend further. More options and guides etc.
 - - e.g. reset the repository to blank, or clone to a new folder for branching.
-- Finish fetch for reporting console logs to gpt via tool call.
+- Finish testing fetch for reporting console logs to gpt via tool call.
 - Explore run failures further. They seem fixed on our end.
-- Migrate to web sockets instead of fetch for responsiveness
 - Add ability for gpt to restart the concurrent environment if the gpt dev needs modifying? >_> <_< maybe a bad idea idk
 - Add screencapping ability (expensive!!) for more automation, better test console logging, help GPT systematize its approach to editing and debugging better to take your hands off the wheel even more.
 

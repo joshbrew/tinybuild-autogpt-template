@@ -1,4 +1,8 @@
+## Automated web dev server with chat prompt and tool calls.
+
 ![image](https://github.com/user-attachments/assets/100d4d85-941b-4df4-b3ef-c68e517f0c84)
+
+It's rudimentary but it's quite usable. Minimal dependencies (openai, dotenv, tinybuild).
 
 ## Build and run
 

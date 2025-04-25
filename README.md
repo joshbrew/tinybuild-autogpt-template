@@ -75,5 +75,6 @@ Add build:true for build-only, add serve:true for serve-only, or set bundle or s
 - Finish testing fetch for reporting console logs to gpt via tool call.
 - Explore run failures further. They seem fixed on our end.
 - Add ability for gpt to restart the concurrent environment if the gpt dev needs modifying? >_> <_< maybe a bad idea idk
-- Add screencapping ability (expensive!!) for more automation, better test console logging, help GPT systematize its approach to editing and debugging better to take your hands off the wheel even more.
+- Add screencapping ability (expensive!!) for more automation, 
+- Help GPT systematize its approach to editing and debugging better to take your hands off the wheel even more.
 

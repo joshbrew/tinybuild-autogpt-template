@@ -9,6 +9,7 @@ dist
 **/package-lock.json
 **/*.log
 .env
+/gpt_dev/saved/*
 
 # Built application files
 #*.apk

@@ -54,6 +54,7 @@ template.innerHTML = `
         placeholder="Conversation title…"
       />
       <ul class="thread-list"></ul>
+      <button type="button" class="reset-project-btn">Reset Project</button>
     </div>
     <div class="chat-main">
       <div class="gpt-chat-header">
@@ -65,6 +66,7 @@ template.innerHTML = `
       <form class="gpt-chat-form">
         <input type="text" placeholder="Type your message…" autocomplete="off"/>
         <button type="submit">Send</button>
+        <button type="button" class="cancel-btn" disabled>Cancel</button>
       </form>
     </div>
   </div>
@@ -84,7 +86,7 @@ class GptChat extends HTMLElement {
     if (this._init) return;
     this._init = true;
     this.append(template.content.cloneNode(true));
-
+  
     this.threadList        = this.querySelector('.thread-list');
     this.newChatBtn        = this.querySelector('.new-chat-btn');
     this.threadNameSidebar = this.querySelector('.thread-name-sidebar');
@@ -94,11 +96,14 @@ class GptChat extends HTMLElement {
     this.chatMessages      = this.querySelector('.gpt-chat-messages');
     this.form              = this.querySelector('.gpt-chat-form');
     this.input             = this.form.querySelector('input');
-    this.sendBtn           = this.form.querySelector('button');
-
+    this.sendBtn           = this.form.querySelector('button[type="submit"]');
+    this.cancelBtn         = this.form.querySelector('.cancel-btn');
+    this.resetProjectBtn = this.querySelector('.reset-project-btn');
+    this.abortController   = null;
+  
     this.threadNameSidebar.style.display = 'none';
     this._ensureConfirmModal();
-
+  
     this.newChatBtn.addEventListener('click', () => this._createNewThread());
     this.deleteChatBtn.addEventListener('click', () => this._deleteCurrentThread());
     this.viewFilesBtn.addEventListener('click', () => this._showFileTree());
@@ -106,21 +111,48 @@ class GptChat extends HTMLElement {
       e.preventDefault();
       this.sendMessage(this.input.value);
     });
-
-    this._loadThreads();
-
-        
-    this.es = new EventSource(API_BASE+'/events');
-    this.es.addEventListener('console', e => {
-      const { id } = JSON.parse(e.data);
-      // send the console history back
-      fetch(API_BASE+'/api/console_history', {
+  
+    this.cancelBtn.addEventListener('click', async () => {
+      if (!this.abortController) return;
+      // Abort the in-flight fetch
+      this.abortController.abort();
+      this.cancelBtn.disabled = true;
+      // Tell backend to clear any queued/in-progress runs
+      await fetch(`${API_BASE}/api/threads/${this.currentThreadId}/cancel`, {
         method: 'POST',
-        headers: { 'Content-Type':'application/json' },
-        body: JSON.stringify({ id, history: window.__consoleHistory__ })
+        headers: { 'Content-Type': 'application/json' }
       });
     });
 
+    this.resetProjectBtn.addEventListener('click', async () => {
+      const ok = await this._confirm(
+        'Are you sure? This will wipe and restore default project files.'
+      );
+      if (!ok) return;
+
+      try {
+        const res = await fetch(`${API_BASE}/api/reset_project`, {
+          method: 'POST'
+        });
+        if (!res.ok) throw new Error(`Status ${res.status}`);
+        // show success notice
+        await this._confirm('Project has been reset to defaults.');
+      } catch (err) {
+        await this._confirm('Failed to reset project: ' + err.message);
+      }
+    });
+  
+    this._loadThreads();
+  
+    this.es = new EventSource(API_BASE + '/events');
+    this.es.addEventListener('console', e => {
+      const { id } = JSON.parse(e.data);
+      fetch(API_BASE + '/api/console_history', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, history: window.__consoleHistory__ })
+      });
+    });
   }
 
   _updateControls() {
@@ -133,7 +165,7 @@ class GptChat extends HTMLElement {
       this.threads.sort((a, b) => a.title.localeCompare(b.title));
       this._renderThreadList();
       if (this.threads.length) {
-        await this._selectThread(this.threads[this.threads.length - 1].id);
+        await this._selectThread(this.threads[0].id);
       } else {
         this._createNewThread();
       }
@@ -315,7 +347,7 @@ class GptChat extends HTMLElement {
     return new Promise(resolve => (modal._resolve = resolve));
   }
 
-  a// ───────────── Message Rendering ─────────────
+  // ───────────── Message Rendering ─────────────
   appendMessage(role, text, ts) {
     const wrap = document.createElement('div');
     wrap.className = `gpt-chat-message ${role}`;
@@ -406,42 +438,57 @@ class GptChat extends HTMLElement {
 
   async sendMessage(prompt) {
     if (!prompt.trim()) return;
-
+  
+    // 1) Set up AbortController & enable Cancel button
+    this.abortController = new AbortController();
+    this.cancelBtn.disabled = false;
+  
+    // 2) Show typing indicator
     const loading = document.createElement('div');
     loading.className = 'typing-indicator';
     loading.innerHTML = '<span></span><span></span><span></span>';
     this.chatMessages.appendChild(loading);
     this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
-
+  
+    // 3) Echo user message
     const userTs = new Date().toLocaleString();
     const { wrap: userWrap } = this.appendMessage('user', prompt, userTs);
     this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
-
+  
+    // 4) Disable input while waiting
     this.input.disabled = this.sendBtn.disabled = true;
     this.input.value = '';
-
+  
+    // 5) Add placeholder for assistant
     const { wrap: placeholderWrap } = this.appendMessage('assistant', '…', '');
     this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
-
+  
     const payload = {
       prompt,
       threadId: this.currentThreadId,
       ...(this.currentThreadId ? {} : { title: this.threadNameSidebar.value.trim() })
     };
-
+  
     let json;
     try {
-      json = await sendPrompt(payload);
+      // pass the signal so we can abort
+      json = await sendPrompt(payload, this.abortController.signal);
     } catch (err) {
-      // network‐level failure
+      // Clean up UI
       placeholderWrap.remove();
       loading.remove();
       this.input.disabled = this.sendBtn.disabled = false;
+      this.cancelBtn.disabled = true;
+  
       const ts = new Date().toLocaleString();
-      this.appendMessage('assistant', `❌ Network Error: ${err.message}`, ts);
+      if (err.name === 'AbortError') {
+        this.appendMessage('assistant', '⚠️ Cancelled by user', ts);
+      } else {
+        this.appendMessage('assistant', `❌ Network Error: ${err.message}`, ts);
+      }
       return;
     }
-
+  
     const {
       error,
       errorMessage,
@@ -451,11 +498,10 @@ class GptChat extends HTMLElement {
       userMessageId,
       assistantMessageId
     } = json;
-
-    // 1) always show whatever ran (including retry entries)
+  
+    // 6) Render any tool logs
     logs.forEach(entry => {
       if (entry.type === 'retry') {
-        // special retry log
         this.appendMessage(
           'tool',
           `🔄 Retry attempt ${entry.attempt}: ${entry.error}`,
@@ -465,38 +511,36 @@ class GptChat extends HTMLElement {
         this.appendToolEntry(entry);
       }
     });
-
+  
+    // 7) Re-enable input
     this.input.disabled = this.sendBtn.disabled = false;
     this.input.focus();
-
-    // 2) if the server says “error”, show it and bail
+  
+    // 8) Handle server-reported error
     if (error) {
-      const ts = new Date().toLocaleString();
-      this.appendMessage(
-        'assistant',
-        `❌ Error: ${errorMessage}`,
-        ts
-      );
+      const ts2 = new Date().toLocaleString();
+      this.appendMessage('assistant', `❌ Error: ${errorMessage}`, ts2);
+      this.cancelBtn.disabled = true;
       return;
     }
-
-    // 3) otherwise, remove placeholders & render the normal assistant reply
+  
+    // 9) On success, replace placeholder & show assistant reply
     placeholderWrap.remove();
     loading.remove();
-
+  
     userWrap.dataset.msgId = userMessageId;
-    const ts = new Date().toLocaleString();
+    const ts3 = new Date().toLocaleTimeString();
     const content = typeof result === 'string'
       ? result
       : extractContent(result.content || []);
-    const { wrap: asstWrap } = this.appendMessage('assistant', content, ts);
+    const { wrap: asstWrap } = this.appendMessage('assistant', content, ts3);
     asstWrap.dataset.msgId = assistantMessageId;
-
     this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
-
-    this.input.disabled = this.sendBtn.disabled = false;
-    this.input.focus();
-
+  
+    // 10) Disable Cancel now that we're done
+    this.cancelBtn.disabled = true;
+  
+    // 11) Thread bookkeeping (as before)
     if (!this.threads.find(t => t.id === threadId)) {
       this.threads.push({
         id: threadId,
@@ -509,7 +553,6 @@ class GptChat extends HTMLElement {
     this._updateThreadNameSidebarVisibility();
     const th = this.threads.find(t => t.id === threadId);
     this.chatTitleEl.textContent = th.title || 'Untitled Chat';
-
   }
 
   _highlightSelectedThread() {

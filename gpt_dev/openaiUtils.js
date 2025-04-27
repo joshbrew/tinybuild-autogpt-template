@@ -2,11 +2,16 @@
 
 import path from 'path';
 import fs from 'fs/promises';
+import http from 'http';
+import https from 'https';
 import OpenAI from 'openai';
 import { exec } from 'child_process';
-import {sseChannel, pendingConsoleHistory} from './serverUtil.js'
+import {sseChannel, pendingConsoleHistory, logError, logInfo, logSuccess, logWarn} from './serverUtil.js'
 import dotenv from 'dotenv';
 dotenv.config();
+
+
+
 
 // ─── Runtime config ─────────────────────────────────────────────────
 export const openai = new OpenAI({
@@ -175,6 +180,18 @@ export const functionSchemas = [
       }
     },
     {
+      name: 'copy_file',
+      description: 'Copy a file from source to destination (preserves the original)',
+      parameters: {
+        type: 'object',
+        properties: {
+          source:      { type: 'string', description: 'Path to source file, relative to project root' },
+          destination: { type: 'string', description: 'Path to destination file, relative to project root' }
+        },
+        required:['source','destination']
+      }
+    },
+    {
       name: 'list_directory',
       description: 'List directory contents. Skip node_modules unless skip_node_modules=false.',
       parameters: {
@@ -186,6 +203,18 @@ export const functionSchemas = [
           deep_node_modules: { type:'boolean' }
         },
         required:[]
+      }
+    },
+    {
+      name: 'fetch_file',
+      description: 'Download a file from the internet and save it locally',
+      parameters: {
+        type: 'object',
+        properties: {
+          url:         { type: 'string', description: 'HTTP(S) URL of the file to download' },
+          destination: { type: 'string', description: 'Relative path to save file' }
+        },
+        required:['url','destination']
       }
     },
     {
@@ -217,6 +246,15 @@ export const functionSchemas = [
           new_filename: { type: 'string', description: 'New file name' }
         },
         required: ['folder','old_filename','new_filename']
+      }
+    },
+    {
+      name: 'reset_project',
+      description: 'Wipe all project files except dist, node_modules, and gpt_dev, then restore from ./gpt_dev/default',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: []
       }
     },
     {
@@ -258,6 +296,7 @@ export const functionSchemas = [
 export const tools = functionSchemas.map(fn => ({ type:'function', function:fn }));
 
 
+
 // ─── Tool‐calling runner ───────────────────────────────────────────────
 export async function runToolCalls(toolCalls) {
   const fnLogs = [], follow = [];
@@ -265,36 +304,13 @@ export async function runToolCalls(toolCalls) {
   const root = process.cwd();
   const safe = (...p) => path.join(root, ...p);
 
-  const makeWalker = opts => async function walk(dir) {
-    const out = [];
-    for (const e of await fs.readdir(dir, { withFileTypes:true })) {
-      if (e.name === 'dist') continue;
-      if (e.name === 'node_modules') {
-        if (opts.skip_node_modules) continue;
-        if (!opts.deep_node_modules) {
-          const pkgs = await fs.readdir(path.join(dir,'node_modules'));
-          out.push({ name:'node_modules', children: pkgs.map(n=>({name:n})) });
-          continue;
-        }
-      }
-      const full = path.join(dir, e.name);
-      if (e.isDirectory()) {
-        const node = { name:e.name };
-        if (opts.recursive) node.children = await walk(full);
-        out.push(node);
-      } else {
-        out.push({ name:e.name });
-      }
-    }
-    return out;
-  };
-
   for (const tc of toolCalls) {
     const name = tc.function?.name ?? tc.name;
     const args = JSON.parse(tc.function?.arguments ?? tc.arguments);
     let result = '';
 
     switch (name) {
+
       case 'read_file': {
         const fp = safe(args.folder, args.filename);
         const txt = await fs.readFile(fp, 'utf-8');
@@ -306,6 +322,7 @@ export async function runToolCalls(toolCalls) {
         });
         break;
       }
+
       case 'write_file': {
         const dir = safe(args.folder);
         await fs.mkdir(dir, { recursive:true });
@@ -326,8 +343,41 @@ export async function runToolCalls(toolCalls) {
         result = JSON.stringify({ byteLength: st2.size });
         break;
       }
+
+      case 'copy_file': {
+        const src = safe(args.source);
+        const dst = safe(args.destination);
+        await fs.mkdir(path.dirname(dst), { recursive: true });
+        await fs.copyFile(src, dst);
+        result = `Copied ${args.source} → ${args.destination}`;
+        break;
+      }
+
+      case 'fetch_file': {
+        const url = args.url;
+        const dst = safe(args.destination);
+        await fs.mkdir(path.dirname(dst), { recursive:true });
+        await new Promise((resolve, reject) => {
+          const client = url.startsWith('https') ? https : http;
+          const req = client.get(url, res => {
+            if (res.statusCode !== 200) {
+              return reject(new Error(`Failed to GET ${url}: ${res.statusCode}`));
+            }
+            const fileStream = fsSync.createWriteStream(dst);
+            res.pipe(fileStream);
+            fileStream.on('finish', () => fileStream.close(resolve));
+          });
+          req.on('error', err => {
+            fsSync.unlink(dst, ()=>{});
+            reject(err);
+          });
+        });
+        result = `Fetched ${url} → ${args.destination}`;
+        break;
+      }
+
       case 'list_directory': {
-        const walker = makeWalker({
+        const walker = makeFileWalker({
           recursive:         args.recursive,
           skip_node_modules: args.skip_node_modules !== false,
           deep_node_modules: args.deep_node_modules === true
@@ -335,6 +385,7 @@ export async function runToolCalls(toolCalls) {
         result = JSON.stringify(await walker(safe(args.folder||'.')));
         break;
       }
+
       case 'move_file': {
         const src = safe(args.source);
         const dst = safe(args.destination);
@@ -343,6 +394,7 @@ export async function runToolCalls(toolCalls) {
         result = `Moved ${args.source} → ${args.destination}`;
         break;
       }
+
       case 'remove_directory': {
         await fs.rm(safe(args.folder), {
           recursive: args.recursive !== false,
@@ -351,6 +403,7 @@ export async function runToolCalls(toolCalls) {
         result = `Removed directory ${args.folder}`;
         break;
       }
+
       case 'rename_file': {
         const dir = safe(args.folder);
         await fs.rename(
@@ -360,6 +413,13 @@ export async function runToolCalls(toolCalls) {
         result = `Renamed ${args.old_filename} → ${args.new_filename}`;
         break;
       }
+
+      case 'reset_project': {
+        const msg = await resetProject();
+        result = msg;
+        break;
+      }
+
       case 'run_shell': {
         result = await new Promise(resolve => {
           exec(args.command, { cwd: root, shell: true }, (err, stdout, stderr) => {
@@ -372,11 +432,13 @@ export async function runToolCalls(toolCalls) {
         });
         break;
       }
+
       case 'reprompt_self': {
         selfPrompt = args.new_prompt;
         result = 'Scheduled self-prompt';
         break;
       }
+
       case 'get_console_history': {
         // 1) create a request id and broadcast SSE
         const id = Math.random()*1000000000000000;
@@ -396,6 +458,7 @@ export async function runToolCalls(toolCalls) {
         result = JSON.stringify(history);
         break;
       }
+
     }
 
     fnLogs.push({ type:'function_call', name, arguments:args });
@@ -427,8 +490,73 @@ async function rateLimit() {
   lastApiCallTime = Date.now();
 }
 
+
+// ─── Reset project utility ───────────────────────────────────────────
+export async function resetProject() {
+  const root = process.cwd();
+  const defaultDir = path.join(root, 'gpt_dev', 'default');
+
+  // 1) Remove everything at root except dist, node_modules, and gpt_dev
+  const entries = await fs.readdir(root, { withFileTypes: true });
+  for (const entry of entries) {
+    if (['dist', 'node_modules', 'gpt_dev', '.env'].includes(entry.name)) continue;
+    const fullPath = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      await fs.rm(fullPath, { recursive: true, force: true });
+    } else {
+      await fs.unlink(fullPath);
+    }
+  }
+
+  // 2) Recursively copy defaults back into project root
+  async function copyRecursive(srcDir, destDir) {
+    await fs.mkdir(destDir, { recursive: true });
+    const items = await fs.readdir(srcDir, { withFileTypes: true });
+    for (const item of items) {
+      const srcPath = path.join(srcDir, item.name);
+      const destPath = path.join(destDir, item.name);
+      if (item.isDirectory()) {
+        await copyRecursive(srcPath, destPath);
+      } else {
+        await fs.copyFile(srcPath, destPath);
+      }
+    }
+  }
+  await copyRecursive(defaultDir, root);
+
+  return 'Project reset from ./gpt_dev/default';
+}
+
+//for reading directories
+export const makeFileWalker = opts => async function walk(dir) {
+  const out = [];
+  for (const e of await fs.readdir(dir, { withFileTypes:true })) {
+    if (e.name === 'dist') continue;
+    if (e.name === 'node_modules') {
+      if (opts.skip_node_modules) continue;
+      if (!opts.deep_node_modules) {
+        const pkgs = await fs.readdir(path.join(dir,'node_modules'));
+        out.push({ name:'node_modules', children: pkgs.map(n=>({name:n})) });
+        continue;
+      }
+    }
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      const node = { name:e.name };
+      if (opts.recursive) node.children = await walk(full);
+      out.push(node);
+    } else {
+      out.push({ name:e.name });
+    }
+  }
+  return out;
+};
+
 // ─── Thread & run helpers ────────────────────────────────────────────
 export async function waitForRunCompletion(threadId, runId) {
+
+  await limitExcessRuns(threadId);
+
   await rateLimit();
   let run = await openai.beta.threads.runs.retrieve(threadId, runId);
   while (['queued','in_progress'].includes(run.status)) {
@@ -437,6 +565,35 @@ export async function waitForRunCompletion(threadId, runId) {
     run = await openai.beta.threads.runs.retrieve(threadId, runId);
   }
   return run;
+}
+
+export async function limitExcessRuns(
+  threadId, 
+  threshold = 48
+) {
+  // list up to threshold+1 runs so we know if we're over
+  const res = await openai.beta.threads.runs.list(threadId, {
+    limit: threshold + 1
+  });
+
+  if (res.data.length > threshold) {
+    // find the oldest run by created_at
+    const oldest = res.data.reduce((oldestSoFar, r) =>
+      !oldestSoFar || r.created_at < oldestSoFar.created_at
+        ? r
+        : oldestSoFar
+    , null);
+
+    if (oldest) {
+      try {
+        await rateLimit();
+        await openai.beta.threads.runs.del(threadId, oldest.id);
+        logInfo(`Trimmed oldest run ${oldest.id} (created_at=${oldest.created_at})`);
+      } catch (err) {
+        logError(`Failed to trim run ${oldest.id}: ${err.message}`);
+      }
+    }
+  }
 }
 
 export async function clearActiveRuns(threadId) {
@@ -456,6 +613,56 @@ export async function clearActiveRuns(threadId) {
         }
       }
     }
+    cursor = res.next_cursor;
+  } while (cursor);
+}
+
+// Handler to clear queued/in-progress runs for a thread:
+export async function cancelRun(ctx) {
+  const { thread_id } = ctx.params;
+  let convo;
+
+  try {
+    convo = await loadConversation(path.join(SAVED_DIR, `${thread_id}.txt`));
+  } catch {
+    return ctx.json(404, { error: 'Thread not found' });
+  }
+  if (!convo.openaiThreadId) {
+    return ctx.json(404, { error: 'No OpenAI thread mapped' });
+  }
+
+  // mark cancellation
+  requestCancel(convo.openaiThreadId);
+  
+  try {
+    await clearAllRuns(convo.openaiThreadId);
+    return ctx.json(200, { canceled: true });
+  } catch (err) {
+    return ctx.json(500, { error: err.message });
+  }
+}
+
+
+export async function clearAllRuns(threadId) {
+  let cursor = null;
+  do {
+    // 1) fetch up to 50 runs at a time
+    const res = await openai.beta.threads.runs.list(threadId, {
+      limit: 50,
+      ...(cursor ? { cursor } : {})
+    });
+
+    // 2) for each run returned, fire off a delete
+    for (const run of res.data) {
+      try {
+        await rateLimit();                    // respect your rate‐limit helper
+        await openai.beta.threads.runs.del(threadId, run.id);
+      } catch {
+        // ignore any failures and keep going
+      }
+    }
+
+    // 3) if there’s another page, loop again
     cursor = res.next_cursor;
   } while (cursor);
 }
@@ -520,20 +727,6 @@ export async function lockThread(threadId) {
 export function unlockThread(threadId) {
   threadLocks.delete(threadId);
 }
-
-// ─── Utils for colored logging ─────────────────────────────────────────
-const COLORS = {
-  reset: "\x1b[0m",
-  cyan: "\x1b[36m",
-  green: "\x1b[32m",
-  yellow: "\x1b[33m",
-  red: "\x1b[31m",
-  magenta: "\x1b[35m"
-};
-function logInfo(msg)    { console.log(`${COLORS.cyan}[INFO]${COLORS.reset} ${msg}`); }
-function logSuccess(msg) { console.log(`${COLORS.green}[OK]${COLORS.reset}  ${msg}`); }
-function logWarn(msg)    { console.warn(`${COLORS.yellow}[WARN]${COLORS.reset} ${msg}`); }
-function logError(msg)   { console.error(`${COLORS.red}[ERR]${COLORS.reset}  ${msg}`); }
 
 // ─── Persistence ─────────────────────────────────────────────────────
 export async function loadConversation(fp) {
@@ -624,6 +817,22 @@ export async function ensureAssistant() {
   return assistantId;
 }
 
+// Track user‐requested cancels
+const cancelFlags = new Map();
+
+/** Mark this thread as “please cancel” */
+export function requestCancel(threadId) {
+  cancelFlags.set(threadId, true);
+}
+
+/** Throw if someone asked to cancel this thread */
+function checkCancel(threadId) {
+  if (cancelFlags.get(threadId)) {
+    cancelFlags.delete(threadId);
+    throw new Error('Cancelled by user');
+  }
+}
+
 // ─── Core prompt flow ─────────────────────────────────────────────────
 export async function handlePrompt({ prompt, threadId, title, systemPrompt }, savedDir) {
   if (!prompt?.trim()) {
@@ -640,10 +849,13 @@ export async function handlePrompt({ prompt, threadId, title, systemPrompt }, sa
   // acquire thread lock
   await lockThread(convo.openaiThreadId);
   try {
+    checkCancel(convo.openaiThreadId);
+
     // ensure no stray runs before starting
     if (convo.openaiThreadId) {
       await waitForActiveRuns(convo.openaiThreadId);
       await clearActiveRuns(convo.openaiThreadId);
+      checkCancel(convo.openaiThreadId);
     }
 
     // Try up to 3 times
@@ -653,10 +865,12 @@ export async function handlePrompt({ prompt, threadId, title, systemPrompt }, sa
         if (convo.openaiThreadId) {
           await waitForActiveRuns(convo.openaiThreadId);
           await clearActiveRuns(convo.openaiThreadId);
+          checkCancel(convo.openaiThreadId);
         }
 
         // 1) post user message
-        const userMsg = await postUserMessage(convo.openaiThreadId, prompt);
+        const userMsg = await postUserMessage(convo.openaiThreadId, prompt);    
+        checkCancel(convo.openaiThreadId);
         convo.messages.push(userMsg);
 
         // 2) run assistant + tools
@@ -665,6 +879,7 @@ export async function handlePrompt({ prompt, threadId, title, systemPrompt }, sa
           assistantId,
           systemPrompt || DEFAULT_SYSTEM_PROMPT
         );
+        checkCancel(convo.openaiThreadId);
         allLogs.push(...fnLogs);
 
         // 3) fetch assistant reply
@@ -673,6 +888,11 @@ export async function handlePrompt({ prompt, threadId, title, systemPrompt }, sa
           fnLogs,
           runAssistantLoop.lastStatus
         );
+
+        //once runs are finished, clear them.
+        await clearAllRuns(convo.openaiThreadId);
+        checkCancel(convo.openaiThreadId);
+
         if (runAssistantLoop.lastStatus !== 'completed') {
           throw new Error(`Run failed with status ${runAssistantLoop.lastStatus}`);
         }

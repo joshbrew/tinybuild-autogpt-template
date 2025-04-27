@@ -30,7 +30,7 @@
     "openai": "*"
   },
   "devDependencies": {
-    "better-sse": "*",
+    "better-sse": "^0.14.1",
     "concurrently": "*",
     "dotenv": "*",
     "ws": "*"

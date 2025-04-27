@@ -1,12 +1,16 @@
+// ./gpt_dev/openaiRoutes.js
 import path from 'path';
 import * as fsp from 'fs/promises';
 import {
+  makeFileWalker,
+  cancelRun,
   handlePrompt,
   runToolCalls,
   loadConversation,
   saveConversation,
   openai,
   SAVED_DIR,
+  resetProject
 } from './openaiUtils.js';
 import {pendingConsoleHistory } from './serverUtil.js'
 // --- Handlers ---
@@ -238,14 +242,15 @@ async function listFiles(ctx) {
     skip_node_modules: ctx.query.skip_node_modules !== 'false',
     deep_node_modules: ctx.query.deep_node_modules === 'true'
   };
-  const { fnLogs } = await runToolCalls([{
-    id: 'files',
-    name: 'list_directory',
-    function: {},
-    arguments: JSON.stringify(params)
-  }]);
+  const walker = makeFileWalker({
+    recursive:         params.recursive,
+    skip_node_modules: params.skip_node_modules !== false,
+    deep_node_modules: params.deep_node_modules === true
+  });
 
-  await ctx.text(200, fnLogs.at(-1).result);
+  const result = JSON.stringify(await walker(path.join(process.cwd(),params.folder||'.')));
+
+  await ctx.text(200, result);
 }
 
 async function handlePromptRoute(ctx) {
@@ -287,7 +292,9 @@ export const routesConfig = {
   '/api/threads/:thread_id': { GET: retrieveRemoteThread, POST: updateRemoteThread, DELETE: deleteThread },
   '/api/threads/:thread_id/messages': { GET: listMessages, POST: postMessage },
   '/api/threads/:thread_id/messages/:message_id': { GET: getMessage, POST: updateMessage, DELETE: deleteMessage },
+  '/api/threads/:thread_id/cancel': { POST: cancelRun },
   '/api/files': { GET: listFiles },
   '/api/prompt': { POST: handlePromptRoute },
+  '/api/reset_project': { POST: resetProject },
   '/api/console_history': { POST: postConsoleHistory }
 };

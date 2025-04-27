@@ -1,0 +1,86 @@
+{
+  "openaiThreadId": "thread_9qMqhv5yZeYus5HzNoAzkWlb",
+  "title": "test",
+  "messages": [
+    {
+      "id": "msg_a2VYFiFOSleehf0Cz3rPlhW6",
+      "object": "thread.message",
+      "created_at": 1745727377,
+      "assistant_id": null,
+      "thread_id": "thread_9qMqhv5yZeYus5HzNoAzkWlb",
+      "run_id": null,
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": {
+            "value": "test",
+            "annotations": []
+          }
+        }
+      ],
+      "attachments": [],
+      "metadata": {}
+    },
+    {
+      "id": "msg_dOnmT8jMqrePyApUDKLWjSTf",
+      "object": "thread.message",
+      "created_at": 1745727380,
+      "assistant_id": "asst_LSo9Io8Q3xlKN3s8r9cqQJjD",
+      "thread_id": "thread_9qMqhv5yZeYus5HzNoAzkWlb",
+      "run_id": "run_YcaRn1vGDhz3JWky0ZrAGTEb",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": {
+            "value": "Hello! I'm here and ready. How can I help you test your project? If you want me to check logs, edit files, or run code, just let me know!",
+            "annotations": []
+          }
+        }
+      ],
+      "attachments": [],
+      "metadata": {}
+    },
+    {
+      "id": "msg_s8jyITrEZp1XMO6nCaSZ0QKt",
+      "object": "thread.message",
+      "created_at": 1745727432,
+      "assistant_id": null,
+      "thread_id": "thread_9qMqhv5yZeYus5HzNoAzkWlb",
+      "run_id": null,
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": {
+            "value": "hi",
+            "annotations": []
+          }
+        }
+      ],
+      "attachments": [],
+      "metadata": {}
+    },
+    {
+      "id": "msg_Aexu8KDotxsgpBcQcrXrz6c4",
+      "object": "thread.message",
+      "created_at": 1745727435,
+      "assistant_id": "asst_LSo9Io8Q3xlKN3s8r9cqQJjD",
+      "thread_id": "thread_9qMqhv5yZeYus5HzNoAzkWlb",
+      "run_id": "run_v4ZsCXp0rwlVk7GoVzSAVioh",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": {
+            "value": "Hi there! How can I help you today? If you have any web development tasks or questions about your project, just let me know!",
+            "annotations": []
+          }
+        }
+      ],
+      "attachments": [],
+      "metadata": {}
+    }
+  ]
+}

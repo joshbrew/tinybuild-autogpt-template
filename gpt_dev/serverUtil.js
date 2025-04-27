@@ -5,6 +5,21 @@ import { createSession, createChannel } from 'better-sse';
 
 dotenv.config();
 
+// ─── Utils for colored logging ─────────────────────────────────────────
+export const COLORS = {
+  reset: "\x1b[0m",
+  cyan: "\x1b[36m",
+  green: "\x1b[32m",
+  yellow: "\x1b[33m",
+  red: "\x1b[31m",
+  magenta: "\x1b[35m"
+};
+export function logInfo(msg)    { console.log(`${COLORS.cyan}[INFO]${COLORS.reset} ${msg}`); }
+export function logSuccess(msg) { console.log(`${COLORS.green}[OK]${COLORS.reset}  ${msg}`); }
+export function logWarn(msg)    { console.warn(`${COLORS.yellow}[WARN]${COLORS.reset} ${msg}`); }
+export function logError(msg)   { console.error(`${COLORS.red}[ERR]${COLORS.reset}  ${msg}`); }
+
+
 export const sseChannel = createChannel();
 export const pendingConsoleHistory = new Map();
 /**

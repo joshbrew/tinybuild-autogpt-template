@@ -50,6 +50,8 @@ button:hover {
 
 /* SIDEBAR */
 .thread-sidebar {
+  
+  position: relative;
   flex: 0 0 200px;             /* fixed 200px */
   background: #12151f;
   color: #eee;
@@ -57,6 +59,21 @@ button:hover {
   flex-direction: column;
   border-right: 1px solid #444;
   overflow-y: auto;
+}
+
+.reset-project-btn {
+  position: absolute;
+  bottom: 1rem;
+  left: 1rem;
+  background: #e53935;
+  color: white;
+  border: none;
+  padding: 0.5rem 1rem;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.reset-project-btn:hover {
+  background: #ef5350;
 }
 
 /* CHAT PANEL */
@@ -450,6 +467,32 @@ button:hover {
   padding: 0.5rem;
   cursor: pointer;
 }
+/* reset top-level lists */
+#fileModal ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* indent every nested list one level to the right */
+#fileModal ul ul {
+  margin-left: 1.5rem;  /* adjust to taste */
+  padding-left: 0;
+}
+
+/* collapse behavior stays the same */
+.file-node.collapsed + ul {
+  display: none;
+}
+
+/* higher-specificity nested lists */
+#fileModal .file-node + ul,
+#fileModal .file-leaf + ul {
+  list-style: none;
+  margin: 0 0 0 1.5rem;
+  padding: 0;
+  display: block;
+}
 
 /* Folders */
 .file-node {
@@ -491,15 +534,20 @@ button:hover {
   display: none;
 }
 
-#fileModal ul {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
 
 #fileModal li {
   list-style: none;
   margin: 0.25rem 0;
   padding: 0;
   line-height: 1.4;
+}
+
+/* when a folder is expanded (i.e. .collapsed has been toggled off), show its children */
+#fileModal .file-node:not(.collapsed) + ul {
+  display: block;
+}
+
+/* optional extra safeguard: any explicitly collapsed folder stays hidden */
+#fileModal .file-node.collapsed + ul {
+  display: none;
 }

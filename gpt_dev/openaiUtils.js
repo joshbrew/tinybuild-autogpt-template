@@ -597,6 +597,14 @@ export async function waitForRunCompletion(threadId, runId) {
     cleanTokenHistory();
   }
 
+  if (run.status === 'failed' || run.status === 'errored') {
+    console.error(
+      `Run ${run.id} failed:`,
+      run.last_error?.code,
+      run.last_error?.message
+    );
+  }
+
   return run;
 }
 
@@ -1057,11 +1065,6 @@ export async function runAssistantLoop(threadId, assistantId, instructions) {
     logInfo(`Run ${run.id} → ${status}`);
 
     if (status === 'failed' || status === 'errored') {
-      console.error(
-        `Run ${run.id} failed:`,
-        finished.last_error?.code,
-        finished.last_error?.message
-      );
       break;
     }
 

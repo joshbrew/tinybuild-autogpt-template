@@ -68,48 +68,19 @@ function apiRequest(path, method = 'GET', body = null, signal = null) {
     : httpRequest(path, method, body, signal);
 }
 
-// ——— Threads ———
-export async function fetchThreads() {
-  const res = await fetch(`${API_BASE}/api/threads`);
-  if (!res.ok) throw new Error(`Error fetching threads: ${res.statusText}`);
-  return res.json();
-}
+/* ───────────── Public helpers ───────────── */
+export const fetchThreads = () =>
+  apiRequest('/api/threads', 'GET');
 
-export async function fetchThreadById(id) {
-  const res = await fetch(`${API_BASE}/api/threads/${id}`);
-  if (!res.ok) throw new Error(`Error fetching thread ${id}: ${res.statusText}`);
-  return res.json();
-}
+export const fetchThreadById = id =>
+  apiRequest(`/api/threads/${encodeURIComponent(id)}`, 'GET');
 
-export async function deleteThreadById(id) {
-  const res = await fetch(`${API_BASE}/api/threads/${id}`, { method: 'DELETE' });
-  if (!res.ok) throw new Error(`Error deleting thread ${id}: ${res.statusText}`);
-  return res.json();
-}
+export const deleteThreadById = id =>
+  apiRequest(`/api/threads/${encodeURIComponent(id)}`, 'DELETE');
 
-// ——— Messaging (always via /api/prompt) ———
-export async function sendPrompt({ prompt, threadId, title } = {}, signal) {
-  const body = { prompt };
-  if (threadId) body.threadId = threadId;
-  if (title)    body.title    = title;
 
-  const res = await fetch(`${API_BASE}/api/prompt`, {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify(body),
-    signal
-  });
-
-  if (!res.ok) {
-    // try to surface a JSON error
-    let err;
-    try { err = await res.json(); }
-    catch { throw new Error(res.statusText); }
-    throw new Error(err.errorMessage || err.error || res.statusText);
-  }
-
-  return res.json();
-}
+export const sendPrompt = (payload, signal) =>
+  apiRequest('/api/prompt', 'POST', payload, signal);
 
 
 export const editMessage = (threadId, msgId, payload) =>

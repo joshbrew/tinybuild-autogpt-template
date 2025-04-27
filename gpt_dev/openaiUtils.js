@@ -10,8 +10,9 @@ import {sseChannel, pendingConsoleHistory, logError, logInfo, logSuccess, logWar
 import dotenv from 'dotenv';
 dotenv.config();
 
-
-
+//depends on model and account permissions. default for 4.1 is 30k tokens, 4.1-mini is 200k
+const TOKEN_LIMIT_PER_MIN = 30000; //200000
+export const MODEL = process.env.GPT_MODEL || 'gpt-4.1'; //gpt-4.1-mini //<-- 200K context for mini
 
 // ─── Runtime config ─────────────────────────────────────────────────
 export const openai = new OpenAI({
@@ -19,132 +20,28 @@ export const openai = new OpenAI({
 });
 export const SAVED_DIR = process.env.SAVED_DIR ||
   path.join(process.cwd(), 'gpt_dev/saved');
-export const MODEL = process.env.GPT_MODEL || 'gpt-4.1';
 export const ASSISTANT_FILE = path.join(SAVED_DIR, 'assistant.json');
 
 // ─── System prompt & tool schemas ────────────────────────────────────
 //todo: refine.
 export const DEFAULT_SYSTEM_PROMPT = `
-You are a server assistant running as a side server for a hot reloading web dev environment. 
+You are a server assistant for a hot-reloading web dev environment.
 
-Use the declared function calls to inspect or modify project files, execute shell commands, 
-check browser console history. Be sure to be aware of your context window limitations when 
-reading files and crawling the file system. Make sure you're careful to re-read files and other local 
-dependencies between edits e.g. so you don't add elements in the index.html and in the index.js to clash for example.
+Use the provided functions to inspect/modify project files, run shell commands, and fetch console history. Always respect your context-window limits and re-read files between edits to avoid conflicts (e.g. between index.html and index.js).
 
-If the user explicitly asks you to “go ahead and work on this yourself”, finish
-your tool chain with **reprompt_self** to supply the follow‑up prompt you want 
-to ask **yourself** and then you may continue calling reprompt_self recursively 
-until you need feedback & testing. Do **not** call reprompt_self unless asked to work autonomously.
+If the user asks you to “go ahead and work on this yourself,” terminate your tool chain with **reprompt_self** supplying the next prompt; only do this when explicitly instructed.
 
-In our file system, gpt_dev contains the files relevant to this prompting environment
-so safely ignore those unless the user specifies. 
+Do not edit files in gpt_dev unless instructed. Do *NOT* edit gpt_dev/default, just edit the project root files.
 
-Be sure to read files carefully and check the directory structure occasionally when editing.
+The project root contains:
+- **.env**, **.gitignore**, **favicon.ico**
+- **index.css**, **index.html**, **index.js**
+- **package-lock.json**, **package.json**, **README.md**
+- **tinybuild.config.js**
 
-The following are based on the project defaults, which should give you all the web or server bundling functionaliy you could need:
+**tinybuild.config.js** uses esbuild to bundle index.js (or index.ts/.jsx/.tsx), CSS imports, and supports custom routes. If you rename index.js, update its entry point in tinybuild.config.js. Worker files auto-bundle when you "import './worker.js'".
 
-Also, note the starter file structure for this project and edit or build on top of it.
-  **Root Files:**
-- **.env**: Environment variables file.
-- **.gitignore**: Specifies files not to track in Git.
-- **favicon.ico**: Icon for the web app.
-- **index.css**: Main stylesheet.
-- **index.html**: Main HTML document.
-- **index.js**: Contains a simple "HELLO WORLD" log.
-- **package-lock.json**: Lockfile describing the installed versions of dependencies.
-- **package.json**: Project metadata and dependencies.
-- **README.md**: Project documentation.
-- **tinybuild.config.js**: Configuration file for the Tinybuild tool.
-
-Notes on the tinybuild.config.js:
-
-It uses index.js as the entry point, for bundling css you can do e.g. "import 'index.css'" in the index.js file.
-The bundler settings in it is just base esbuild plus some extra settings that are well documented in the file. 
-You can add any generic esbuild settings or plugins to it. 
-The server config serves a hot reloading development content server.
-Note as in package.json, we are running the gpt chat server separately so it can be run in a separate window persistently 
-while the content server hot reloads before your eyes. This includes css hot swapping without page refresh, or js/ts and other files triggering refresh.
-
-Also note in the server settings of the config that you can add additional routes to the config so it can serve multiple pages.
-
-const config = {
-    //build:true, //enable this to skip serve step (same as cli)
-    //serve:true //or enable this to skip build step (same as cli)
-    bundler: { //esbuild settings, set false to skip build step or add bundle:true to config object to only bundle (alt methods)
-      ... 
-      tinybuild specific plus generic esbuild bundler settings e.g. 
-      entryPoints: ['index.js','gpt_dev/gpt_dev.js']
-      ...
-    },
-    server: {  //node server settings, set false to skip server step or add serve:true to config object to only serve (alt methods)
-      ...
-      routes:{ //set additional page routes (for sites instead of single page applications)
-        '/gptdev': './gpt_dev/gpt_dev.html'
-        //'/': 'index.html', //alt start page declaration
-        //'/404':'packager/node_server/other/404.html', //e.g. custom error page
-        //'/page2': 'mypage.html',
-        //'/custom':{ //e.g. custom page template
-        //    headers: { 'Content-Security-Policy': '*' }, //page specific headers 
-        //    template:'<html><head></head><body><div>Hello World!</div></body></html>'
-            //path: 'mypage.html' //or a file path (e.g. plus specific headers)
-            //onrequest: (request,response) => {}, //custom request/response handling, return true to end the request automatically.
-        //},
-        //'/redirect':{ //e.g. custom redirect
-        //    redirect:'https://google.com'
-        //},
-        //'/other':(request,response) => {}, //custom request/response handling, return true to end the request automatically.
-      },
-      ...  
-    },
-    /*
-    mobile:{ //this will copy the dist and index.html to capacitor builds that can create small interoperable javascript webview + native functionality (e.g. bluetooth) mobile apps (~2Mb at minimum). 
-        android:'open', //'open'//true //Requires Android Studio, it will be launched
-        ios:false //'open'//true //Requires XCode 
-    },
-    electron:true, //desktop apps as a full chromium bundle, not small and needs some customization for things like bluetooth menus. Better for full featured applications. Can trigger backend runtimes on local machines.
-    tauri:true, //alternative tauri build options for very minimal native engine desktop apps that generally lack the latest web APIs. Good for simple apps, you can bundle it with backend runtimes on local machines.
-    assets:[ //for the mobile/desktop bundlers to copy into their respective folders
-        './assets',
-        './favicon.ico'
-    ]
-    */
-}
-
-There's much more but that is the most essential 
-feature you might tweak in a multi page environment, 
-but generally stick to single page applications and import 
-assets to index.js to bundle. Refer to https://github.com/joshbrew/tinybuild for more info.
-
-Also note we can bundle worker files automatically by just importing the worker with a 'worker.js/ts' in the file somewhere
-then you apply that imported file e.g. like import wrkr from 'my.worker.js' then new Worker(wrkr); This is *very* important for faster bundled multithreaded applications!!
-
-The default index.html is formatted like:
-
-<!DOCTYPE html>
-<html>
-    <head>
-        <link rel="stylesheet" href="dist/index.css">
-    </head>
-    <body>  
-        <script src="dist/index.js">
-        </script>
-    </body>
-</html>
-        
-
-So the index.js and css get bundled to the dist folder and that 
-bundled copy is referenced as esbuild strips out ts and other issues.
-
-Generally, it's best to not touch this and work from index.js and build the 
-page programmatically. esbuild natively supports jsx/tsx as well for react/preact/etc.
-
-Happy coding! You are now the self aware code monkey server of the 
-future. Give it your best most professional, readable, and sensibly 
-modular work that can overcome context limitations e.g. extremely clean code with various logic archetypes consolidated
-plus documentation blocks thrown up front for a quick summary of functionality and so on in a way that the LLM
-can best retain memory while reading/writing to a file system.
-
+The default **index.html** references "dist/index.css" and "dist/index.js". Stick to single-page apps or modify tinybuild.config.js to contain more routes in the server config for easy multi-page site demoing, import assets in index.js, and refer to https://github.com/joshbrew/tinybuild for full details.
 `;
 
 /* ────────── tool schemas ────────── */
@@ -304,6 +201,8 @@ export async function runToolCalls(toolCalls) {
   const root = process.cwd();
   const safe = (...p) => path.join(root, ...p);
 
+  checkCancel(threadId);
+
   for (const tc of toolCalls) {
     const name = tc.function?.name ?? tc.name;
     const args = JSON.parse(tc.function?.arguments ?? tc.arguments);
@@ -313,8 +212,22 @@ export async function runToolCalls(toolCalls) {
 
       case 'read_file': {
         const fp = safe(args.folder, args.filename);
-        const txt = await fs.readFile(fp, 'utf-8');
-        const st = await fs.stat(fp);
+        let txt, st;
+        try {
+          txt = await fs.readFile(fp, 'utf-8');
+          st  = await fs.stat(fp);
+        } catch (err) {
+          if (err.code === 'ENOENT') {
+            // fallback to empty content (or signal error back to ChatGPT)
+            result = JSON.stringify({
+              content:    '',
+              byteLength: 0,
+              modifiedTime: null
+            });
+            break;
+          }
+          throw err;
+        }
         result = JSON.stringify({
           content: txt,
           byteLength: st.size,
@@ -322,7 +235,7 @@ export async function runToolCalls(toolCalls) {
         });
         break;
       }
-
+      
       case 'write_file': {
         const dir = safe(args.folder);
         await fs.mkdir(dir, { recursive:true });
@@ -347,9 +260,29 @@ export async function runToolCalls(toolCalls) {
       case 'copy_file': {
         const src = safe(args.source);
         const dst = safe(args.destination);
-        await fs.mkdir(path.dirname(dst), { recursive: true });
-        await fs.copyFile(src, dst);
-        result = `Copied ${args.source} → ${args.destination}`;
+        const root = process.cwd();
+      
+        // 1) Ensure neither path escapes the project root
+        if (!src.startsWith(root + path.sep) || !dst.startsWith(root + path.sep)) {
+          result = `Error: invalid path (outside project root)`;
+          break;
+        }
+      
+        try {
+          // 2) Ensure the destination directory exists
+          await fs.mkdir(path.dirname(dst), { recursive: true });
+          // 3) Attempt the copy
+          await fs.copyFile(src, dst);
+          result = `Copied ${args.source} → ${args.destination}`;
+        } catch (err) {
+          // 4) Missing source file? handle gracefully
+          if (err.code === 'ENOENT') {
+            result = `Error copying "${args.source}": file not found`;
+            break;
+          }
+          // 5) Otherwise re-throw
+          throw err;
+        }
         break;
       }
 
@@ -377,12 +310,28 @@ export async function runToolCalls(toolCalls) {
       }
 
       case 'list_directory': {
-        const walker = makeFileWalker({
-          recursive:         args.recursive,
-          skip_node_modules: args.skip_node_modules !== false,
-          deep_node_modules: args.deep_node_modules === true
-        });
-        result = JSON.stringify(await walker(safe(args.folder||'.')));
+        const folder = args.folder || '.';
+        const absPath = safe(folder);
+      
+        // guard against “no such directory”
+        let items = [];
+        try {
+          const walker = makeFileWalker({
+            recursive:         args.recursive,
+            skip_node_modules: args.skip_node_modules !== false,
+            deep_node_modules: args.deep_node_modules === true,
+          });
+          items = await walker(absPath);
+        } catch (err) {
+          if (err.code === 'ENOENT') {
+            console.warn(`list_directory: directory not found at ${absPath}, returning []`);
+            items = [];
+          } else {
+            throw err;
+          }
+        }
+      
+        result = JSON.stringify(items);
         break;
       }
 
@@ -421,6 +370,11 @@ export async function runToolCalls(toolCalls) {
       }
 
       case 'run_shell': {
+        console.log("Shell running: ", args.command);
+        if(args.command === 'npm run build') {
+          result = "Illegal command."
+          break; 
+        }
         result = await new Promise(resolve => {
           exec(args.command, { cwd: root, shell: true }, (err, stdout, stderr) => {
             resolve(JSON.stringify({
@@ -435,6 +389,7 @@ export async function runToolCalls(toolCalls) {
 
       case 'reprompt_self': {
         selfPrompt = args.new_prompt;
+        console.log("Prompting self: ", selfPrompt);
         result = 'Scheduled self-prompt';
         break;
       }
@@ -489,6 +444,7 @@ async function rateLimit() {
   }
   lastApiCallTime = Date.now();
 }
+
 
 
 // ─── Reset project utility ───────────────────────────────────────────
@@ -552,69 +508,96 @@ export const makeFileWalker = opts => async function walk(dir) {
   return out;
 };
 
+// ─── Token-bucket state ───────────────────────────────
+const tokenHistory = [];  // { ts: <ms-since-epoch>, tokens: <number> }
+
+function cleanTokenHistory() {
+  const cutoff = Date.now() - 60_000;
+  while (tokenHistory.length && tokenHistory[0].ts < cutoff) {
+    tokenHistory.shift();
+  }
+}
+
+function estimateTokensFromString(str) {
+  return Math.ceil(str.length / 4);
+}
+
+async function throttleByTokens(estimate = 0) {
+  const used = tokenHistory.reduce((sum,e) => sum + e.tokens, 0);
+  if (used + estimate > TOKEN_LIMIT_PER_MIN) {
+    // how many tokens we must free
+    let excess = used + estimate - TOKEN_LIMIT_PER_MIN;
+    let freed = 0, releaseTs = Date.now();
+    for (const entry of tokenHistory) {
+      freed += entry.tokens;
+      if (freed >= excess) {
+        releaseTs = entry.ts + 60_000;
+        break;
+      }
+    }
+    const waitMs = releaseTs - Date.now();
+    console.log(`Throttling by tokens: waiting ${waitMs}ms to stay under ${TOKEN_LIMIT_PER_MIN}/min`);
+    await new Promise(r => setTimeout(r, waitMs));
+
+    cleanTokenHistory();
+
+    // Reserve these tokens immediately so no other call can grab them
+    if (estimate > 0) {
+      tokenHistory.push({ ts: Date.now(), tokens: estimate });
+    }
+
+  }
+}
+
 // ─── Thread & run helpers ────────────────────────────────────────────
+async function createRunWithRateLimitRetry(threadId, assistantId, instructions, tools) {
+  while (true) {
+    try {
+      await rateLimit();  // your existing minimum‐interval throttle
+      return await openai.beta.threads.runs.create(threadId, {
+        assistant_id: assistantId,
+        instructions,
+        tools,
+        tool_choice: 'auto'
+      });
+    } catch (err) {
+      // only retry on rate_limit_exceeded
+      if (err.status === 429 && err.error?.code === 'rate_limit_exceeded') {
+        // parse "Please try again in 14.818s"
+        const m = err.error.message.match(/(\d+(\.\d+)?)s/);
+        const waitMs = m ? Math.ceil(parseFloat(m[1]) * 1000) : 16000;
+        console.warn(`Run rate-limited; retrying in ${waitMs} ms…`);
+        await new Promise(r => setTimeout(r, waitMs));
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+
+// ─── Wait for a run to finish, then record its token usage ──────────
 export async function waitForRunCompletion(threadId, runId) {
-
-  await limitExcessRuns(threadId);
-
   await rateLimit();
   let run = await openai.beta.threads.runs.retrieve(threadId, runId);
-  while (['queued','in_progress'].includes(run.status)) {
+
+  // keep polling until it’s done, but allow cancellation at each step
+  while (['queued', 'in_progress'].includes(run.status)) {
+    checkCancel(threadId);
     await new Promise(r => setTimeout(r, 500));
     await rateLimit();
     run = await openai.beta.threads.runs.retrieve(threadId, runId);
   }
-  return run;
-}
 
-export async function limitExcessRuns(
-  threadId, 
-  threshold = 48
-) {
-  // list up to threshold+1 runs so we know if we're over
-  const res = await openai.beta.threads.runs.list(threadId, {
-    limit: threshold + 1
-  });
+  // final cancellation check before we record or return
+  checkCancel(threadId);
 
-  if (res.data.length > threshold) {
-    // find the oldest run by created_at
-    const oldest = res.data.reduce((oldestSoFar, r) =>
-      !oldestSoFar || r.created_at < oldestSoFar.created_at
-        ? r
-        : oldestSoFar
-    , null);
-
-    if (oldest) {
-      try {
-        await rateLimit();
-        await openai.beta.threads.runs.del(threadId, oldest.id);
-        logInfo(`Trimmed oldest run ${oldest.id} (created_at=${oldest.created_at})`);
-      } catch (err) {
-        logError(`Failed to trim run ${oldest.id}: ${err.message}`);
-      }
-    }
+  if (run.usage?.total_tokens) {
+    tokenHistory.push({ ts: Date.now(), tokens: run.usage.total_tokens });
+    cleanTokenHistory();
   }
-}
 
-export async function clearActiveRuns(threadId) {
-  let cursor = null;
-  do {
-    const res = await openai.beta.threads.runs.list(threadId, {
-      limit: 50,
-      ...(cursor ? { cursor } : {})
-    });
-    for (const r of res.data) {
-      if (['queued', 'in_progress'].includes(r.status)) {
-        try {
-          await rateLimit();
-          await openai.beta.threads.runs.del(threadId, r.id);
-        } catch {
-          // ignore individual delete errors
-        }
-      }
-    }
-    cursor = res.next_cursor;
-  } while (cursor);
+  return run;
 }
 
 // Handler to clear queued/in-progress runs for a thread:
@@ -633,38 +616,105 @@ export async function cancelRun(ctx) {
 
   // mark cancellation
   requestCancel(convo.openaiThreadId);
-  
+
   try {
-    await clearAllRuns(convo.openaiThreadId);
     return ctx.json(200, { canceled: true });
   } catch (err) {
     return ctx.json(500, { error: err.message });
   }
 }
 
+// ─── Init conversation ────────────────────────────────────────────────
+export async function initConversation(threadId, title, savedDir) {
+  logInfo(`initConversation (threadId=${threadId})`);
+  let localId, convo;
+  if (threadId) {
+    localId = threadId;
+    logInfo(`Loading existing convo file`);
+    convo = await loadConversation(path.join(savedDir, `${localId}.txt`));
+  } else {
+    logInfo(`Creating new thread via API`);
+    await rateLimit();
+    logInfo(`API CALL: create thread`);
+    const thread = await openai.beta.threads.create();
+    localId = thread.id;
+    convo = { messages: [], openaiThreadId: thread.id, title: title || '' };
+    logSuccess(`Thread created ${thread.id}`);
+  }
+  if (!convo.title) {
+      convo.title = title || localId || 'Chat';
+      logInfo(`Conversation title set to "${convo.title}"`);
+  }
+  return { localId, convo };
+}
 
-export async function clearAllRuns(threadId) {
-  let cursor = null;
-  do {
-    // 1) fetch up to 50 runs at a time
-    const res = await openai.beta.threads.runs.list(threadId, {
-      limit: 50,
-      ...(cursor ? { cursor } : {})
-    });
+// ─── Post a user message ─────────────────────────────────────────────
+export async function postUserMessage(openaiThreadId, prompt) {
+  logInfo(`API CALL: postUserMessage to thread ${openaiThreadId}`);
+  const msg = await safeCreateMessage(openaiThreadId, {
+    role: 'user',
+    content: [{ type:'text', text: prompt.trim() }]
+  });
+  return msg;
+}
 
-    // 2) for each run returned, fire off a delete
-    for (const run of res.data) {
-      try {
-        await rateLimit();                    // respect your rate‐limit helper
-        await openai.beta.threads.runs.del(threadId, run.id);
-      } catch {
-        // ignore any failures and keep going
-      }
+/**
+ * Splits an array of {tool_call_id, output} entries into
+ * batches whose JSON-stringified size (in tokens) stays under
+ * TOKEN_LIMIT_PER_MIN, submitting them one batch at a time.
+ */
+export async function submitToolOutputsInBatches(threadId, runId, toolOutputs) {
+  // Turn to minimal payload entries
+  const entries = toolOutputs.map(({ tool_call_id, output }) => ({ tool_call_id, output }));
+  let idx = 0;
+
+  while (idx < entries.length) {
+    checkCancel(threadId);
+
+    // 1) Refresh history & compute how many tokens remain in this minute
+    cleanTokenHistory();
+    const used = tokenHistory.reduce((sum, e) => sum + e.tokens, 0);
+    const remaining = TOKEN_LIMIT_PER_MIN - used;
+
+    if (remaining <= 0) {
+      // no capacity right now — wait until the oldest usage is >60s old
+      const waitUntil = tokenHistory[0].ts + 60_000;
+      const waitMs = Math.max(0, waitUntil - Date.now());
+      logInfo(`No TPM capacity; sleeping ${waitMs}ms`);
+      await new Promise(r => setTimeout(r, waitMs));
+      continue;
     }
 
-    // 3) if there’s another page, loop again
-    cursor = res.next_cursor;
-  } while (cursor);
+    // 2) Build the largest batch that fits under 'remaining'
+    const batch = [];
+    let batchEst = 0;
+    while (idx < entries.length) {
+      const cand = entries[idx];
+      const trial = JSON.stringify([...batch, cand]);
+      const trialEst = estimateTokensFromString(trial);
+
+      if (trialEst > remaining) {
+        if (batch.length === 0) {
+          // Single entry too big — truncate it and retry
+          cand.output = trimOutput(cand.output);
+          continue;
+        }
+        break;
+      }
+
+      batch.push(cand);
+      batchEst = trialEst;
+      idx++;
+    }
+
+    // 3) Reserve tokens & submit this chunk
+    await throttleByTokens(batchEst);
+    checkCancel(threadId);
+    logInfo(`Submitting batch of ${batch.length} tool_outputs (~${batchEst} tokens)`);
+    await openai.beta.threads.runs.submitToolOutputs(threadId, runId, {
+      tool_outputs: batch
+    });
+  }
 }
 
 /**
@@ -673,24 +723,22 @@ export async function clearAllRuns(threadId) {
 export async function waitForActiveRuns(threadId) {
   let cursor = null;
   do {
-    const res = await openai.beta.threads.runs.list(threadId, {
-      limit: 50,
-      ...(cursor ? { cursor } : {})
-    });
+    checkCancel(threadId);
+    const res = await openai.beta.threads.runs.list(threadId, { limit: 50, ...(cursor ? { cursor } : {}) });
     for (const r of res.data) {
+      checkCancel(threadId);
       if (['queued', 'in_progress', 'requires_action'].includes(r.status)) {
-        // If waiting on your tool outputs, drive it to completion
         if (r.status === 'requires_action') {
           const { fnLogs: newLogs, follow, selfPrompt } =
             await runToolCalls(r.required_action.submit_tool_outputs.tool_calls);
+
           await rateLimit();
-          await openai.beta.threads.runs.submitToolOutputs(threadId, r.id, {
-            tool_outputs: follow
-              .filter(m => m.role === 'tool')
-              .map(t => ({ tool_call_id: t.tool_call_id, output: t.content }))
-          });
+
+          const payload = { tool_outputs: follow.filter(m => m.role === 'tool')
+            .map(t => ({ tool_call_id: t.tool_call_id, output: t.content })) };
+
+          await submitToolOutputsInBatches(threadId, r.id, payload.tool_outputs);
         }
-        // then wait for it to finish
         await waitForRunCompletion(threadId, r.id);
       }
     }
@@ -698,23 +746,50 @@ export async function waitForActiveRuns(threadId) {
   } while (cursor);
 }
 
+// ─── Safe POST of a user message with dynamic TPM check & cancel ────
 export async function safeCreateMessage(threadId, params) {
   while (true) {
+    // abort if user asked
+    checkCancel(threadId);
+
+    // build the flat text payload to estimate tokens
+    let text = '';
+    if (Array.isArray(params.content)) {
+      text = params.content
+        .map(c => (typeof c.text === 'string' ? c.text : c.text.value))
+        .join('');
+    } else {
+      text = typeof params.content === 'string'
+        ? params.content
+        : JSON.stringify(params.content);
+    }
+    const estimate = estimateTokensFromString(text);
+
+    // wait for enough “remaining” capacity
+    cleanTokenHistory();
+    const used     = tokenHistory.reduce((sum,e) => sum + e.tokens, 0);
+    const remaining = TOKEN_LIMIT_PER_MIN - used;
+    if (estimate > remaining) {
+      // sleep until the oldest token drops out
+      const waitUntil = tokenHistory[0].ts + 60_000;
+      await new Promise(r => setTimeout(r, Math.max(0, waitUntil - Date.now())));
+    }
+
+    // reserve and send
+    await throttleByTokens(estimate);
     try {
-      await rateLimit();
       return await openai.beta.threads.messages.create(threadId, params);
     } catch (err) {
       if (err.status === 400 && err.error?.message.includes('active run')) {
-        // first let any legitimate runs finish
+        // wait for any in-flight runs to finish, then retry
         await waitForActiveRuns(threadId);
-        // then clear only true orphans
-        await clearActiveRuns(threadId);
         continue;
       }
       throw err;
     }
   }
 }
+
 
 // ─── Simple thread lock ──────────────────────────────────────────────
 const threadLocks = new Map();
@@ -842,38 +917,40 @@ export async function handlePrompt({ prompt, threadId, title, systemPrompt }, sa
   let allLogs = [];
   let convo, localId, assistantId;
 
-  // initial setup
+  // 1) Setup assistant & conversation
   assistantId = await ensureAssistant();
   ({ localId, convo } = await initConversation(threadId, title, savedDir));
 
-  // acquire thread lock
+  // 2) Lock & clear prior runs
   await lockThread(convo.openaiThreadId);
   try {
     checkCancel(convo.openaiThreadId);
-
-    // ensure no stray runs before starting
     if (convo.openaiThreadId) {
       await waitForActiveRuns(convo.openaiThreadId);
-      await clearActiveRuns(convo.openaiThreadId);
       checkCancel(convo.openaiThreadId);
     }
 
-    // Try up to 3 times
+    // 3) Try up to 3 times
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
-        // before posting the user message, wait & clear any active runs
+        // a) clear stray runs before posting
         if (convo.openaiThreadId) {
           await waitForActiveRuns(convo.openaiThreadId);
-          await clearActiveRuns(convo.openaiThreadId);
           checkCancel(convo.openaiThreadId);
         }
 
-        // 1) post user message
-        const userMsg = await postUserMessage(convo.openaiThreadId, prompt);    
+        // b) throttle for user prompt
+        let userMsg;
+        if (attempt === 1) {
+          userMsg = await safeCreateMessage(convo.openaiThreadId, {
+            role: 'user',
+            content: [{ type: 'text', text: prompt.trim() }]
+          });
+        }
         checkCancel(convo.openaiThreadId);
-        convo.messages.push(userMsg);
+        if (userMsg) convo.messages.push(userMsg);
 
-        // 2) run assistant + tools
+        // c) run assistant + tools
         const { fnLogs, selfPrompt } = await runAssistantLoop(
           convo.openaiThreadId,
           assistantId,
@@ -882,140 +959,130 @@ export async function handlePrompt({ prompt, threadId, title, systemPrompt }, sa
         checkCancel(convo.openaiThreadId);
         allLogs.push(...fnLogs);
 
-        // 3) fetch assistant reply
+        // d) fetch the reply
         const asst = await fetchAssistantReply(
           convo.openaiThreadId,
           fnLogs,
           runAssistantLoop.lastStatus
         );
-
-        //once runs are finished, clear them.
-        await clearAllRuns(convo.openaiThreadId);
         checkCancel(convo.openaiThreadId);
 
         if (runAssistantLoop.lastStatus !== 'completed') {
-          throw new Error(`Run failed with status ${runAssistantLoop.lastStatus}`);
+          throw new Error(`Run failed: ${runAssistantLoop.lastStatus}`);
         }
+
+        // e) record & optionally handle self-prompt loops
         convo.messages.push(asst);
-
-        // 4) optional self-prompt
-        if (selfPrompt) {
-          const extra = await handleSelfPrompt(convo.openaiThreadId, assistantId, selfPrompt);
-          convo.messages.push(...extra);
+        let looped = [];
+        let sp = selfPrompt;
+        while (sp) {
+          checkCancel(convo.openaiThreadId);
+          const extra = await handleSelfPrompt(convo.openaiThreadId, assistantId, sp);
+          looped.push(...extra);
+          sp = runAssistantLoop.lastStatus === 'completed'
+             ? null
+             : runAssistantLoop.lastStatus.selfPrompt;
         }
+        convo.messages.push(...looped);
 
-        // 5) save conversation
+        // f) persist
         await saveConversation(path.join(savedDir, `${localId}.txt`), convo);
 
-        // SUCCESS
         return {
           error: false,
           logs: allLogs,
           result: flattenContent(asst.content),
           threadId: localId,
           openaiThreadId: convo.openaiThreadId,
-          userMessageId: userMsg.id,
           assistantMessageId: asst.id
         };
-
       } catch (err) {
-        // record this retry
-        allLogs.push({ type: 'retry', attempt, error: err.message });
-
-        if (attempt === 3) {
-          // on last attempt, bubble the error out to outer catch
-          throw err;
+        // **Cancellation is final—don’t retry**
+        if (err.message === 'Cancelled by user') {
+          return {
+            error: false,
+            result: '🛑 Operation cancelled.',
+            logs: allLogs,
+            threadId: localId,
+            openaiThreadId: convo.openaiThreadId
+          };
         }
 
-        // Clear stuck runs before retrying
-        try {
-          if (convo.openaiThreadId) {
-            await clearActiveRuns(convo.openaiThreadId);
-          }
-        } catch {}
-        continue;
+        // Otherwise record a retry and loop again (up to 3)
+        allLogs.push({ type: 'retry', attempt, error: err.message });
+        if (attempt === 3) {
+          throw err;
+        }
       }
     }
   } catch (err) {
     return { error: true, errorMessage: err.message, logs: allLogs };
   } finally {
-    // always release the lock
-    try { unlockThread(convo.openaiThreadId); } catch {}
+    unlockThread(convo.openaiThreadId);
   }
 }
 
-
-// ─── Init conversation ────────────────────────────────────────────────
-export async function initConversation(threadId, title, savedDir) {
-  logInfo(`initConversation (threadId=${threadId})`);
-  let localId, convo;
-  if (threadId) {
-    localId = threadId;
-    logInfo(`Loading existing convo file`);
-    convo = await loadConversation(path.join(savedDir, `${localId}.txt`));
-  } else {
-    logInfo(`Creating new thread via API`);
-    await rateLimit();
-    logInfo(`API CALL: create thread`);
-    const thread = await openai.beta.threads.create();
-    localId = thread.id;
-    convo = { messages: [], openaiThreadId: thread.id, title: title || '' };
-    logSuccess(`Thread created ${thread.id}`);
-  }
-  if (!convo.title) {
-      convo.title = title || localId || 'Chat';
-      logInfo(`Conversation title set to "${convo.title}"`);
-  }
-  return { localId, convo };
-}
-
-// ─── Post a user message ─────────────────────────────────────────────
-export async function postUserMessage(openaiThreadId, prompt) {
-  logInfo(`API CALL: postUserMessage to thread ${openaiThreadId}`);
-  const msg = await safeCreateMessage(openaiThreadId, {
-    role: 'user',
-    content: [{ type:'text', text: prompt.trim() }]
-  });
-  return msg;
-}
-
-// ─── Assistant/tool run loop ─────────────────────────────────────────
+// ─── Main assistant run loop, now using both throttles ─────────────
 export async function runAssistantLoop(threadId, assistantId, instructions) {
-  logInfo(`Starting assistant loop (thread=${threadId}, assistant=${assistantId})`);
-  let status;
-  const fnLogs = [];
-  let selfPrompt;
+  // initial cancel check
+  checkCancel(threadId);
+  logInfo(`Starting assistant loop (thread=${threadId})`);
 
+  // reserve tokens & fire off the run
+  const instrText = typeof instructions === 'string'
+    ? instructions
+    : JSON.stringify(instructions);
+  await throttleByTokens(estimateTokensFromString(instrText));
   await rateLimit();
-  logInfo(`API CALL: create run`);
-  let run = await openai.beta.threads.runs.create(threadId, {
-    assistant_id: assistantId,
-    instructions,
-    tools,
-    tool_choice: 'auto'
-  });
-  logSuccess(`Run created (id=${run.id})`);
+
+  const run = await createRunWithRateLimitRetry(
+    threadId, assistantId, instructions, tools
+  );
+
+  const fnLogs = [];
+  let selfPrompt = null;
+  let status = run.status;
 
   while (true) {
-    logInfo(`Waiting for run ${run.id} completion`);
-    run = await waitForRunCompletion(threadId, run.id);
-    status = run.status;
-    logInfo(`Run status: ${status}`);
-    if (status !== 'requires_action') break;
+    // allow cancellation before polling
+    checkCancel(threadId);
 
-    logInfo(`Submitting tool outputs`);
+    // this will throw if cancel arrives during polling
+    const finished = await waitForRunCompletion(threadId, run.id);
+
+    // one more check right as we come out of polling
+    checkCancel(threadId);
+
+    status = finished.status;
+    logInfo(`Run ${run.id} → ${status}`);
+
+    if (status === 'failed' || status === 'errored') {
+      console.error(
+        `Run ${run.id} failed:`,
+        finished.last_error?.code,
+        finished.last_error?.message
+      );
+      break;
+    }
+
+    if (status !== 'requires_action') {
+      break;
+    }
+
+    // handle any required_action tool calls...
     const { fnLogs: newLogs, follow, selfPrompt: sp } =
-      await runToolCalls(run.required_action.submit_tool_outputs.tool_calls);
+      await runToolCalls(finished.required_action.submit_tool_outputs.tool_calls);
     fnLogs.push(...newLogs);
     selfPrompt = sp || selfPrompt;
 
-    await rateLimit();
-    logInfo(`API CALL: submitToolOutputs`);
-    await openai.beta.threads.runs.submitToolOutputs(threadId, run.id, {
-      tool_outputs: follow
-        .filter(m => m.role === 'tool')
-        .map(t => ({ tool_call_id: t.tool_call_id, output: t.content }))
-    });
+    checkCancel(threadId);
+
+    const outs = follow
+      .filter(m => m.role === 'tool')
+      .map(t => ({ tool_call_id: t.tool_call_id, output: t.content }));
+
+    logInfo(`API CALL: submitToolOutputs (batched)`);
+    await submitToolOutputsInBatches(threadId, run.id, outs);
   }
 
   runAssistantLoop.lastStatus = status;
@@ -1024,6 +1091,7 @@ export async function runAssistantLoop(threadId, assistantId, instructions) {
 
 // ─── Fetch or fallback assistant reply ────────────────────────────────
 export async function fetchAssistantReply(threadId, fnLogs, lastStatus) {
+  checkCancel(threadId);
   logInfo(`Listing last messages for thread ${threadId}`);
   await rateLimit();
   logInfo(`API CALL: list messages`);
@@ -1046,8 +1114,8 @@ export async function fetchAssistantReply(threadId, fnLogs, lastStatus) {
 
 // ─── Self-prompt continuation ────────────────────────────────────────
 export async function handleSelfPrompt(threadId, assistantId, selfPrompt) {
+  checkCancel(threadId);
   logInfo(`handleSelfPrompt invoked`);
-  await clearActiveRuns(threadId);
   logInfo(`Posting self-prompt user message`);
   const userMsg = await safeCreateMessage(threadId, {
     role: 'user',

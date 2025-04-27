@@ -71,8 +71,8 @@ Add build:true for build-only, add serve:true for serve-only, or set bundle or s
 ## TODO:
 
 - Improve chat frontend further. More options and guides etc.
-- Test tool calls further.
-- Keep testing runs, think clearing the history now will help success rates.
+- Test tool calls further. Test limits. 
+- Keep testing runs and token throttling, other models allow more tokens per minute unless you are a higher paying account.
 - Add ability for gpt to restart the concurrent environment if the gpt dev needs modifying? >_> <_< maybe a bad idea idk
 - Add screencapping ability (expensive!!) for more automation, 
 - Help GPT systematize its approach to editing and debugging better to take your hands off the wheel even more.

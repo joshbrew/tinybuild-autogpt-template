@@ -1,0 +1,126 @@
+{
+  "openaiThreadId": "thread_CCwHVnEdxQYSIS2zpPfgkBQh",
+  "title": "test",
+  "messages": [
+    {
+      "id": "msg_dJogKmWvCxN3MGKN0ubM9xBI",
+      "object": "thread.message",
+      "created_at": 1745749769,
+      "assistant_id": null,
+      "thread_id": "thread_CCwHVnEdxQYSIS2zpPfgkBQh",
+      "run_id": null,
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": {
+            "value": "read the current directory then add",
+            "annotations": []
+          }
+        }
+      ],
+      "attachments": [],
+      "metadata": {}
+    },
+    {
+      "id": "msg_vJmvg5AKmg6goNbACHHp1T9w",
+      "object": "thread.message",
+      "created_at": 1745749775,
+      "assistant_id": "asst_4A1hIiPqyMZWWN0Ru2zGMsWm",
+      "thread_id": "thread_CCwHVnEdxQYSIS2zpPfgkBQh",
+      "run_id": "run_wg7zJvFfg3yfZI9SnWHCIykQ",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": {
+            "value": "The current directory contains the following files and folders:\n\n- .env\n- .git\n- .gitattributes\n- .gitignore\n- favicon.ico\n- gpt_dev\n- index.css\n- index.html\n- index.jsx\n- package-lock.json\n- package.json\n- README.md\n- src\n- tinybuild.config.js\n\nWhat would you like me to add or do next? Please specify!",
+            "annotations": []
+          }
+        }
+      ],
+      "attachments": [],
+      "metadata": {}
+    },
+    {
+      "id": "msg_OzcyNEZqxhU6ZiP2xP9ueZVL",
+      "object": "thread.message",
+      "created_at": 1745749789,
+      "assistant_id": null,
+      "thread_id": "thread_CCwHVnEdxQYSIS2zpPfgkBQh",
+      "run_id": null,
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": {
+            "value": "\"@react-three/drei\": \"^10.0.7\",     \"@react-three/fiber\": \"^9.1.2\", show off with these",
+            "annotations": []
+          }
+        }
+      ],
+      "attachments": [],
+      "metadata": {}
+    },
+    {
+      "id": "msg_7jwjvA0A2Gs9Mt7Xw7qddloa",
+      "object": "thread.message",
+      "created_at": 1745749823,
+      "assistant_id": "asst_4A1hIiPqyMZWWN0Ru2zGMsWm",
+      "thread_id": "thread_CCwHVnEdxQYSIS2zpPfgkBQh",
+      "run_id": "run_1GBOZ6gKkFXahJKnCt0un5gv",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": {
+            "value": "I've installed @react-three/drei and @react-three/fiber, and updated your ShowOff component to demonstrate an interactive 3D scene right in your dashboard! It features:\n\n- A floating, animated 3D hot pink box\n- OrbitControls (rotation with mouse drag)\n- Bright directional and ambient lighting\n- A stylish HTML label floating in 3D\n\nThis will appear in place of your previous color-changing text animation. Want more objects, or to customize the scene further? Let me know!",
+            "annotations": []
+          }
+        }
+      ],
+      "attachments": [],
+      "metadata": {}
+    },
+    {
+      "id": "msg_Gd0AlTmKTSyuK2zAsxOk4kk5",
+      "object": "thread.message",
+      "created_at": 1745749868,
+      "assistant_id": null,
+      "thread_id": "thread_CCwHVnEdxQYSIS2zpPfgkBQh",
+      "run_id": null,
+      "role": "user",
+      "content": [
+        {
+          "type": "text",
+          "text": {
+            "value": "great! keep showing off",
+            "annotations": []
+          }
+        }
+      ],
+      "attachments": [],
+      "metadata": {}
+    },
+    {
+      "id": "msg_hAqfP97sPQjU3ipjWDZ125qn",
+      "object": "thread.message",
+      "created_at": 1745749886,
+      "assistant_id": "asst_4A1hIiPqyMZWWN0Ru2zGMsWm",
+      "thread_id": "thread_CCwHVnEdxQYSIS2zpPfgkBQh",
+      "run_id": "run_ZzBy0Rs8UVh0pggo6VaeE5U2",
+      "role": "assistant",
+      "content": [
+        {
+          "type": "text",
+          "text": {
+            "value": "Your ShowOff component got an upgrade! Now it features:\n\n- Three animated, floating 3D objects: a hot pink box, a turquoise sphere, and a glossy magenta torus (\"donut\")\n- Sparkling effects and a starfield cosmic background\n- 3D text floating in space (\"WOW!\")\n- Smooth soft shadows and dynamic lighting\n- All objects labeled with animated HTML in 3D\n\nReload your app to watch your dashboard wow with even more 3D magic. Would you like to see something even wilder—animations, camera moves, or user interactivity?",
+            "annotations": []
+          }
+        }
+      ],
+      "attachments": [],
+      "metadata": {}
+    }
+  ]
+}

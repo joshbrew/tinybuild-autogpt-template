@@ -1,0 +1,1 @@
+body{margin:0;padding:0;min-height:100vh;overflow:hidden;background:#f6f8fb}#rainbow-sinewave-canvas{display:block;pointer-events:none;z-index:2;position:fixed;top:50%;left:50%;width:min(80vw,80vh);height:min(80vw,80vh);transform:translate(-50%,-50%);margin:0;clip-path:polygon(0% 100%,100% 100%,50% 0%);-webkit-clip-path:polygon(0% 100%,100% 100%,50% 0%);background:transparent}

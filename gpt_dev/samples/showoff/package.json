@@ -14,7 +14,7 @@
     "esbuild"
   ],
   "dependencies": {
-    "openai": "*"
+    "openai": "*",
   },
   "devDependencies": {
     "better-sse": "*",

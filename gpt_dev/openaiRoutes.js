@@ -254,15 +254,35 @@ async function listFiles(ctx) {
 }
 
 async function handlePromptRoute(ctx) {
-  try {
-    const body = await ctx.body();
-    const { logs, result, threadId, openaiThreadId, userMessageId, assistantMessageId } =
-      await handlePrompt(body, SAVED_DIR);
-    await ctx.json(200, { logs, result, threadId, openaiThreadId, userMessageId, assistantMessageId });
-  } catch (err) {
-    const code = err.message === 'Missing prompt' ? 400 : 500;
-    await ctx.json(code, { error: err.message });
+  // parse the incoming body
+  const body = await ctx.body();
+
+  // call into handlePrompt
+  const res = await handlePrompt(body, SAVED_DIR);
+
+  // if handlePrompt decided there was an error, return that as a 400 (or 500 if you prefer)
+  if (res.error) {
+    return ctx.json(400, { error: res.errorMessage });
   }
+
+  // otherwise unpack and return the normal fields
+  const {
+    logs,
+    result,
+    threadId,
+    openaiThreadId,
+    userMessageId,
+    assistantMessageId
+  } = res;
+
+  return ctx.json(200, {
+    logs,
+    result,
+    threadId,
+    openaiThreadId,
+    userMessageId,
+    assistantMessageId
+  });
 }
 
 async function postConsoleHistory(ctx) {

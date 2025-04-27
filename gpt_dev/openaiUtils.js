@@ -195,7 +195,7 @@ export const tools = functionSchemas.map(fn => ({ type:'function', function:fn }
 
 
 // ─── Tool‐calling runner ───────────────────────────────────────────────
-export async function runToolCalls(toolCalls) {
+export async function runToolCalls(toolCalls, threadId) {
   const fnLogs = [], follow = [];
   let selfPrompt = null;
   const root = process.cwd();
@@ -738,7 +738,7 @@ export async function waitForActiveRuns(threadId) {
       if (['queued', 'in_progress', 'requires_action'].includes(r.status)) {
         if (r.status === 'requires_action') {
           const { fnLogs: newLogs, follow, selfPrompt } =
-            await runToolCalls(r.required_action.submit_tool_outputs.tool_calls);
+            await runToolCalls(r.required_action.submit_tool_outputs.tool_calls, threadId);
 
           await rateLimit();
 
@@ -1074,7 +1074,7 @@ export async function runAssistantLoop(threadId, assistantId, instructions) {
 
     // handle any required_action tool calls...
     const { fnLogs: newLogs, follow, selfPrompt: sp } =
-      await runToolCalls(finished.required_action.submit_tool_outputs.tool_calls);
+      await runToolCalls(finished.required_action.submit_tool_outputs.tool_calls, threadId);
     fnLogs.push(...newLogs);
     selfPrompt = sp || selfPrompt;
 

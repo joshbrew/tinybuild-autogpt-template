@@ -1,6 +1,34 @@
 ## Automated web dev server with chat prompt and tool calls.
 
-![image](https://github.com/user-attachments/assets/100d4d85-941b-4df4-b3ef-c68e517f0c84)
+Currently uses 4.1-mini at the base (200K tokens for threads/assistants) and can prompt summary models or smarter models for help with prompts and context sizes. We tried to throttle it as best as possible so the context sizes are respected.
+
+<table>
+  <tr>
+    <td>
+      <p>Paraphrasing: “Make a crazy wave pattern with pastel colors, put it in a triangle with a gradient background.”</p>
+      <img
+        src="https://github.com/user-attachments/assets/100d4d85-941b-4df4-b3ef-c68e517f0c84"
+        alt="Crazy wave pattern in pastel colors inside a triangle on a gradient background"
+      />
+    </td>
+    <td>
+      <p>“Make something with Howler and React… also make snake with growing/shrinking bubbles.”</p>
+      <img
+        src="https://github.com/user-attachments/assets/b8c62e9b-115c-4553-854c-f3f637ba2034"
+        alt="Howler & React snake game with growing and shrinking bubbles"
+      />
+      <p>It installed its own dependencies and fetched sound files off the internet</p>
+    </td>
+    <td>
+      <p>“Make it funky... Make it funkier... etc etc.”</p>
+      <img
+        src="https://github.com/user-attachments/assets/38d4c788-07c3-475e-bcf7-e1ab9cc99fd6"
+        alt="Additional artwork"
+      />
+      <p>It installed its own dependencies and arranged a src folder with components, renamed the js to jsx including updating the bundler entryPoint to match.</p>
+    </td>
+  </tr>
+</table>
 
 It's rudimentary but it's quite usable. Minimal dependencies (openai, dotenv, concurrently, tinybuild, ws, better-sse).
 

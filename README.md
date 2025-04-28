@@ -30,6 +30,8 @@ Currently uses 4.1-mini at the base (200K tokens for threads/assistants) and can
   </tr>
 </table>
 
+### [Example Video](https://youtu.be/84Pggzt8A0c)
+
 It's rudimentary but it's quite usable. Minimal dependencies (openai, dotenv, concurrently, tinybuild, ws, better-sse).
 
 ## Build and run
@@ -70,8 +72,6 @@ And much more can be configured with the `tinybuild.config.js`
 Have fun watching your website or webapp code itself! Assistant runs tend to be a bit slow depending on the model, and not all models can use assistants yet. Currently it is set to GPT-4.1 but you can just set the model from this list: https://platform.openai.com/docs/pricing
 
 ## Prompting Tips
-
-### [Example Video](https://youtu.be/84Pggzt8A0c)
 
 Tell it to read and add features to e.g. index.css or index.js and to use script-based web components or a react root rather than editing index.html. This will stop it from screwing up the imports too much since our build environment has preset targets for bundling. 
 

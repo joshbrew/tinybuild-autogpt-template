@@ -1,0 +1,37 @@
+{
+  "name": "gpt_auto_web_dev",
+  "version": "1.0.0",
+  "description": "Dummy tinybuild app with gpt side car for auto editing.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "type": "module",
+  "scripts": {
+    "start": "concurrently \"tinybuild\" \"node ./gpt_dev/server.js\""
+  },
+  "author": "",
+  "license": "",
+  "keywords": [
+    "esbuild"
+  ],
+  "dependencies": {
+    "howler": "^2.2.4",
+    "openai": "*",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "better-sse": "*",
+    "concurrently": "*",
+    "dotenv": "*",
+    "ws": "*"
+  },
+  "nodemonConfig": {
+    "env": {
+      "NODEMON": true
+    },
+    "ignore": [
+      "dist/",
+      ".temp/"
+    ]
+  }
+}

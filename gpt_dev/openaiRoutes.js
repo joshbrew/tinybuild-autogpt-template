@@ -2,17 +2,19 @@
 import path from 'path';
 import * as fsp from 'fs/promises';
 import {
-  makeFileWalker,
   cancelRun,
   handlePrompt,
-  runToolCalls,
   loadConversation,
   saveConversation,
   openai,
-  SAVED_DIR,
-  resetProject
+  SAVED_DIR
 } from './openaiUtils.js';
-import {pendingConsoleHistory } from './serverUtil.js'
+import {
+  pendingConsoleHistory, 
+  resetProject, 
+  makeFileWalker
+} from './serverUtil.js'
+
 // --- Handlers ---
 async function listThreads(ctx) {
   const files = (await fsp.readdir(SAVED_DIR))

@@ -368,6 +368,11 @@ button:hover {
   color: #ddd;
 }
 
+.gpt-chat-message.tool .content {
+  background: #444;    /* a dark, contrasting backdrop */
+  color:    #fff;      /* white text for maximum legibility */
+}
+
 /* floating edit/delete toolbar */
 .msg-actions {
   position: absolute;

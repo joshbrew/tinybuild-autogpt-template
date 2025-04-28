@@ -1,3 +1,7 @@
+import path from 'path';
+import fs from 'fs/promises';
+// import http from 'http';
+// import https from 'https';
 import dotenv from 'dotenv';
 import { WebSocketServer } from 'ws';
 import { routesConfig } from './openaiRoutes.js'; // pattern->methods object
@@ -205,3 +209,115 @@ export function findRoute(pathname) {
   return null;
 }
 
+// ─── Flatten content array to text ───────────────────────────────────
+export function flattenContent(contents) {
+  return contents
+    .map(c => typeof c.text === 'string' ? c.text : c.text.value)
+    .join('\n');
+}
+
+// ─── Rate Limiting ───────────────────────────────────────────────────
+const RATE_LIMIT_INTERVAL_MS = 500; // Minimum interval between OpenAI API calls (500ms = 120 RPM)
+let lastApiCallTime = 0;
+export async function rateLimit() {
+  const now = Date.now();
+  const elapsed = now - lastApiCallTime;
+  if (elapsed < RATE_LIMIT_INTERVAL_MS) {
+    await new Promise(r => setTimeout(r, RATE_LIMIT_INTERVAL_MS - elapsed));
+  }
+  lastApiCallTime = Date.now();
+}
+
+// ─── Reset project utility ───────────────────────────────────────────
+export async function resetProject() {
+  const root = process.cwd();
+  const defaultDir = path.join(root, 'gpt_dev', 'default');
+
+  // 1) Remove everything at root except dist, node_modules, and gpt_dev
+  const entries = await fs.readdir(root, { withFileTypes: true });
+  for (const entry of entries) {
+    if (['dist', 'node_modules', 'gpt_dev', '.env'].includes(entry.name)) continue;
+    const fullPath = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      await fs.rm(fullPath, { recursive: true, force: true });
+    } else {
+      await fs.unlink(fullPath);
+    }
+  }
+
+  // 2) Recursively copy defaults back into project root
+  async function copyRecursive(srcDir, destDir) {
+    await fs.mkdir(destDir, { recursive: true });
+    const items = await fs.readdir(srcDir, { withFileTypes: true });
+    for (const item of items) {
+      const srcPath = path.join(srcDir, item.name);
+      const destPath = path.join(destDir, item.name);
+      if (item.isDirectory()) {
+        await copyRecursive(srcPath, destPath);
+      } else {
+        await fs.copyFile(srcPath, destPath);
+      }
+    }
+  }
+  await copyRecursive(defaultDir, root);
+
+  return 'Project reset from ./gpt_dev/default';
+}
+
+
+
+//for reading directories
+export const makeFileWalker = opts => async function walk(dir) {
+  const out = [];
+  for (const e of await fs.readdir(dir, { withFileTypes:true })) {
+    if (e.name === 'dist') continue;
+    if (e.name === 'node_modules') {
+      if (opts.skip_node_modules) continue;
+      if (!opts.deep_node_modules) {
+        const pkgs = await fs.readdir(path.join(dir,'node_modules'));
+        out.push({ name:'node_modules', children: pkgs.map(n=>({name:n})) });
+        continue;
+      }
+    }
+    const full = path.join(dir, e.name);
+    if (e.isDirectory()) {
+      const node = { name:e.name };
+      if (opts.recursive) node.children = await walk(full);
+      out.push(node);
+    } else {
+      out.push({ name:e.name });
+    }
+  }
+  return out;
+};
+
+
+
+// ─── Simple thread lock ──────────────────────────────────────────────
+const threadLocks = new Map();
+export async function lockThread(threadId) {
+  while (threadLocks.get(threadId)) {
+    await new Promise(r => setTimeout(r, 100));
+  }
+  threadLocks.set(threadId, true);
+}
+export function unlockThread(threadId) {
+  threadLocks.delete(threadId);
+}
+
+
+// Track user‐requested cancels
+const cancelFlags = new Map();
+
+/** Mark this thread as “please cancel” */
+export function requestCancel(threadId) {
+  cancelFlags.set(threadId, true);
+}
+
+/** Throw if someone asked to cancel this thread */
+export function checkCancel(threadId) {
+  if (cancelFlags.get(threadId)) {
+    cancelFlags.delete(threadId);
+    throw new Error('Cancelled by user');
+  }
+}

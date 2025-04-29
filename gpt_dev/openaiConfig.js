@@ -10,6 +10,8 @@ export const MODEL_LIMITS = {
   // add others as needed
 };
 
+export const SUMM_LIMIT = 5120; //summary token limit. Change based on model constraints
+
 export const TOKEN_LIMIT_PER_MIN =
   MODEL_LIMITS[BASE_MODEL] ?? 30000;    // fallback if MODEL isn’t in the map
 export const PRUNE_AT      = Math.round(TOKEN_LIMIT_PER_MIN*1.2/3);         // prune when ctxTokens exceed this

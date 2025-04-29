@@ -20,7 +20,7 @@ import { functionSchemas, tools } from './openaiToolCalls.js';
 
 import {
   BASE_MODEL, SUMM_MODEL, SMART_MODEL,
-  MODEL_LIMITS, 
+  MODEL_LIMITS, SUMM_LIMIT,
   TOKEN_LIMIT_PER_MIN, PRUNE_AT, KEEP_N_LIVE,
   RUN_SAFE_MULT, COMP_BUF, HARD_CAP, 
   ASSISTANT_FILE, SAVED_DIR
@@ -707,7 +707,7 @@ Do NOT emit any extra text as it will be parsed directly into submitToolOutputs 
       { role: 'user', content: joined }
     ],
     temperature: 0.2,
-    max_tokens: 512
+    max_tokens: SUMM_LIMIT
   });
 
   // 4) parse the JSON array back into our summaries

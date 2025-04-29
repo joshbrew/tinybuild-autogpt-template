@@ -5,7 +5,6 @@ import fs from 'fs/promises';
 import fsSync from 'fs'
 import http from 'http';
 import https from 'https';
-import OpenAI from 'openai';
 import { exec } from 'child_process';
 import {
   flattenContent, 
@@ -14,8 +13,6 @@ import {
   rateLimit, lockThread, unlockThread, checkCancel, requestCancel,
   logError, logInfo, logSuccess, logWarn
 } from './serverUtil.js'
-import dotenv from 'dotenv';
-dotenv.config();
 
 import{ DEFAULT_SYSTEM_PROMPT } from './openaiSystemPrompt.js'
 import { functionSchemas, tools } from './openaiToolCalls.js';
@@ -26,19 +23,25 @@ import {
   MODEL_LIMITS, 
   TOKEN_LIMIT_PER_MIN, PRUNE_AT, KEEP_N_LIVE,
   RUN_SAFE_MULT, COMP_BUF, HARD_CAP, 
-  EST_SAFE_MULT
+  ASSISTANT_FILE, SAVED_DIR
 } from './openaiConfig.js'
 
-// ─── Runtime config ─────────────────────────────────────────────────
-export const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
-export const SAVED_DIR = process.env.SAVED_DIR ||
-  path.join(process.cwd(), 'gpt_dev/saved');
-export const ASSISTANT_FILE = path.join(SAVED_DIR, 'assistant.json');
+import { 
+  openai, 
+  listThreadMessages, listThreadRuns, 
+  createChatCompletion, 
+  createThread, createThreadRun, 
+  createThreadMessage, deleteThreadMessage,
+  submitRunToolOutputs, 
+  createAssistant, deleteAssistant,
+  retrieveThreadRun
+} from './openaiClient.js';
+
+import dotenv from 'dotenv';
+dotenv.config();
 
 
-// ─── Tool‐calling runner ───────────────────────────────────────────────
+// ─── Tool‐calling runner, see function schemas in openaiToolCalls.js  ───────────────────────────────────────────────
 export async function runToolCalls(toolCalls, threadId) {
   const fnLogs = [], follow = [];
   let selfPrompt = null;
@@ -254,14 +257,12 @@ export async function runToolCalls(toolCalls, threadId) {
 
       case 'smart_chat': {
         const { messages, temperature = 0.7, max_tokens } = args;
-        // invoke the smarter model
-        const resp = await openai.chat.completions.create({
+        const resp = await createChatCompletion({
           model: SMART_MODEL,
           messages,
           temperature,
           max_tokens
         });
-        // grab the assistant’s reply
         const reply = resp.choices?.[0]?.message?.content ?? '';
         result = JSON.stringify({ reply });
         break;
@@ -312,8 +313,6 @@ export async function runToolCalls(toolCalls, threadId) {
 
   return { fnLogs, follow, selfPrompt };
 }
-
-
 
 
 // Map: OpenAI-thread-ID → running total of message-tokens *as last sent*
@@ -391,9 +390,9 @@ async function pruneThread(threadId, keepN = KEEP_N_LIVE) {
   let cursor = null, all = [];
   do {
     await rateLimit();
-    const res = await openai.beta.threads.messages.list(
-      threadId, { limit: 100, order: 'asc', ...(cursor ? { cursor } : {}) }
-    );
+    const res = await listThreadMessages(threadId, {
+      limit: 100, order: 'asc', ...(cursor ? { cursor } : {})
+    });
     all.push(...res.data);
     cursor = res.next_cursor;
   } while (cursor);
@@ -412,31 +411,28 @@ async function pruneThread(threadId, keepN = KEEP_N_LIVE) {
   /* 3) build a short summary */
   logInfo(`[pruneThread] summarising ${head.length} msgs`);
   await rateLimit();
-  const summary = await openai.chat.completions.create({
+  const summaryResp = await createChatCompletion({
     model: SUMM_MODEL,
     messages: [
-      { role:'system',
-        content:'Summarise the following conversation briefly & accurately:' },
-      ...head.map(m => ({
-        role: m.role,
-        content: flattenContent(m.content)
-      }))
+      { role: 'system', content: 'Summarise the following conversation briefly & accurately:' },
+      ...head.map(m => ({ role: m.role, content: flattenContent(m.content) }))
     ],
     max_tokens: 256,
     temperature: 0.2
-  }).then(r => r.choices[0].message.content.trim());
+  });
+  const summary = summaryResp.choices[0].message.content.trim();
 
   /* 4) delete the head messages (inc. dropped “tool” ones) */
   for (const m of head) {
     await rateLimit();
-    await openai.beta.threads.messages.del(threadId, m.id);
+    await deleteThreadMessage(threadId, m.id);
   }
 
   /* 5) insert the summary */
   await rateLimit();
-  await openai.beta.threads.messages.create(threadId, {
+  await createThreadMessage(threadId, {
     role: 'system',
-    content: [{ type:'text', text: `Conversation summary:\n${summary}` }]
+    content: [{ type: 'text', text: `Conversation summary:\n${summary}` }]
   });
 
   /* 6) recompute ctx tally */
@@ -462,7 +458,7 @@ async function throttleByTokens(estimate = 0) {
 
   // how many tokens we’ll try to reserve (capped at your per-minute limit)
   const want = Math.min(
-    Math.ceil(estimate * EST_SAFE_MULT),
+    Math.ceil(estimate * RUN_SAFE_MULT),
     TOKEN_LIMIT_PER_MIN
   );
 
@@ -515,7 +511,7 @@ export async function initConversation(threadId, title, savedDir) {
     logInfo(`Creating new thread via API`);
     await rateLimit();
     logInfo(`API CALL: create thread`);
-    const thread = await openai.beta.threads.create();
+    const thread = await createThread();
     localId = thread.id;
     convo   = { messages: [], openaiThreadId: thread.id, title: title || '' };
     logSuccess(`Thread created ${thread.id}`);
@@ -583,7 +579,7 @@ export async function createRunWithRateLimitRetry(threadId, assistantId, userPro
   let run;
   while (true) {
     try {
-      run = await openai.beta.threads.runs.create(threadId, {
+      run = await createThreadRun(threadId, {
         assistant_id: assistantId,
         instructions: instrString,
         tools,
@@ -617,14 +613,14 @@ export async function createRunWithRateLimitRetry(threadId, assistantId, userPro
 // ─── Wait for a run to finish, then record its token usage ──────────
 export async function waitForRunCompletion(threadId, runId) {
   await rateLimit();
-  let run = await openai.beta.threads.runs.retrieve(threadId, runId);
+  let run = await retrieveThreadRun(threadId, runId);
 
   // keep polling until it’s done, but allow cancellation at each step
   while (['queued', 'in_progress'].includes(run.status)) {
     checkCancel(threadId);
     await new Promise(r => setTimeout(r, 500));
     await rateLimit();
-    run = await openai.beta.threads.runs.retrieve(threadId, runId);
+    run = await retrieveThreadRun(threadId, runId);;
   }
 
   // final cancellation check before we record or return
@@ -701,17 +697,17 @@ using the “System prompt” provided for that output.
 Return a JSON array of objects, each with two keys:
 - "tool_call_id" (same as input)
 - "output"      (the summary string)
-Do NOT emit any extra text.`;
+Do NOT emit any extra text as it will be parsed directly into submitToolOutputs as the tool_outputs array`;
 
   // 3) ask the summarizer
-  const resp = await openai.chat.completions.create({
-    model:       SUMM_MODEL,
+  const resp = await createChatCompletion({
+    model: SUMM_MODEL,
     messages: [
       { role: 'system', content: system },
-      { role: 'user',   content: joined }
+      { role: 'user', content: joined }
     ],
     temperature: 0.2,
-    max_tokens:  512
+    max_tokens: 512
   });
 
   // 4) parse the JSON array back into our summaries
@@ -727,9 +723,7 @@ Do NOT emit any extra text.`;
   await throttleByTokens(estimateTokensFromString(JSON.stringify(summaries)) + COMP_BUF);
   await rateLimit();
 
-  await openai.beta.threads.runs.submitToolOutputs(threadId, runId, {
-    tool_outputs: summaries
-  });
+  await submitRunToolOutputs(threadId, runId, { tool_outputs: summaries });
   cycleAnswered(runId);
   logInfo('[summarizePerCall] submitted summarized payload');
 }
@@ -759,10 +753,7 @@ export async function submitToolOutputsSafe(
     await waitForRunCompletion(threadId, runId);
     await throttleByTokens(fullTokens + COMP_BUF);
     await rateLimit();
-
-    await openai.beta.threads.runs.submitToolOutputs(threadId, runId, {
-      tool_outputs: toolOutputs
-    });
+    await submitRunToolOutputs(threadId, runId, { tool_outputs: toolOutputs });
     cycleAnswered(runId);
     logSuccess('[submitToolOutputsSafe] full payload sent');
 
@@ -783,15 +774,14 @@ function cycleAnswered(runId)       { answeredToolCallCycle.set(runId, true); }
 function resetCycleFlag(runId)      { answeredToolCallCycle.delete(runId);    }
 function alreadyAnswered(runId)     { return answeredToolCallCycle.has(runId); }
 
+//this doesn't work, openai expects all outputs at once for a set that was called, so we can't chunk outputs
 export async function submitChunksSeparately(threadId, runId, entries) {
   for (const entry of entries) {
     // throttle, cancel-check, etc. as before…
     await throttleByTokens(estimateTokensFromString(JSON.stringify(entry)) + COMP_BUF);
     await pruneThread(threadId);
     // send exactly one tool_output per call
-    await openai.beta.threads.runs.submitToolOutputs(threadId, runId, {
-      tool_outputs: [ entry ]
-    });
+    await submitRunToolOutputs(threadId, runId, { tool_outputs: [ entry ] });
     await new Promise(r => setTimeout(r, 1000));
     // wait for the model to pick it up before next chunk
     await waitForRunCompletion(threadId, runId);
@@ -832,7 +822,7 @@ export async function safeCreateMessage(threadId, params) {
 
     await throttleByTokens(estimate);
     try {
-      const msg = await openai.beta.threads.messages.create(threadId, params);
+      const msg = await createThreadMessage(threadId, params);
       addToThreadTally(threadId, params.content);
       return msg;
     } catch (err) {
@@ -909,7 +899,7 @@ export async function ensureAssistant() {
     try {
       await rateLimit();
       logInfo(`API CALL: delete assistant ${existing.assistantId}`);
-      await openai.beta.assistants.del(existing.assistantId);
+      await deleteAssistant(existing.assistantId);
       logSuccess(`Deleted assistant ${existing.assistantId}`);
     } catch (err) {
       logError(`Failed to delete old assistant: ${err.message}`);
@@ -919,7 +909,7 @@ export async function ensureAssistant() {
   logInfo(`Creating new assistant`);
   await rateLimit();
   logInfo(`API CALL: create assistant`);
-  const asst = await openai.beta.assistants.create({
+  const asst = await createAssistant({
     name: 'Server Assistant',
     instructions: currentInstr,
     tools: [], // function‐calling only
@@ -1056,62 +1046,55 @@ export async function handlePrompt({ prompt, threadId, title, systemPrompt }, sa
 }
 
 /**
- * Waits for any queued, in-progress, or requires_action runs to complete before proceeding.
+ * Waits until there are no more runs in queued/in_progress/requires_action.
  */
 export async function waitForActiveRuns(threadId) {
-  const fnLogs = [];          // collect logs locally
+  const fnLogs = [];
 
-  let cursor = null;
-  do {
+  while (true) {
     checkCancel(threadId);
 
-    const res = await openai.beta.threads.runs.list(
-      threadId,
-      { limit: 50, ...(cursor ? { cursor } : {}) }
+    // Fetch the most recent 100 runs
+    const res = await listThreadRuns(threadId, { limit: 100 });
+    const liveRuns = res.data.filter(r =>
+      ['queued', 'in_progress', 'requires_action'].includes(r.status)
     );
 
-    for (const run of res.data) {
+    // If none left, we’re done
+    if (liveRuns.length === 0) {
+      return fnLogs;
+    }
+
+    // Handle each active run
+    for (const run of liveRuns) {
       checkCancel(threadId);
 
-      if (['queued', 'in_progress', 'requires_action'].includes(run.status)) {
-        // ── requires_action → run tool calls once ──────────────────
-        if (run.status === 'requires_action') {
-          if (!alreadyAnswered(run.id)) {
-            // 1) execute the pending tool calls
-            const { fnLogs: newLogs, follow } =
-              await runToolCalls(
-                run.required_action.submit_tool_outputs.tool_calls,
-                threadId
-              );
-            fnLogs.push(...newLogs);
+      if (run.status === 'requires_action') {
+        // a) execute pending tool calls
+        const tc = run.required_action.submit_tool_outputs.tool_calls;
+        const { fnLogs: newLogs, follow } = await runToolCalls(tc, threadId);
+        fnLogs.push(...newLogs);
 
-            // 2) collect their outputs
-            const outs = follow
-              .filter(m => m.role === 'tool')
-              .map(t => ({ tool_call_id: t.tool_call_id, output: t.content }));
+        // b) collect their outputs
+        const outs = follow
+          .filter(m => m.role === 'tool')
+          .map(t => ({ tool_call_id: t.tool_call_id, output: t.content }));
 
-            // 3) re-submit them, now passing the original toolCalls array too
-            const tc = run.required_action.submit_tool_outputs.tool_calls;
-            await submitToolOutputsSafe(threadId, run.id, tc, outs);
+        // c) re-submit them with the original definitions
+        await submitToolOutputsSafe(threadId, run.id, tc, outs);
 
-            cycleAnswered(run.id);
-          }
+        // d) wait for this run to move past requires_action
+        await waitForRunCompletion(threadId, run.id);
 
-          // wait for the run to advance, then clear flag
-          await waitForRunCompletion(threadId, run.id);
-          resetCycleFlag(run.id);
-          continue;
-        }
-
-        // ── queued / in_progress → just wait it out ────────────────
+      } else {
+        // queued or in_progress → just wait it out
         await waitForRunCompletion(threadId, run.id);
       }
     }
 
-    cursor = res.next_cursor;
-  } while (cursor);
-
-  return fnLogs;
+    // Brief pause before the next poll
+    await new Promise(r => setTimeout(r, 200));
+  }
 }
 
 
@@ -1168,9 +1151,10 @@ export async function fetchAssistantReply(threadId, fnLogs, lastStatus) {
   logInfo(`Listing last messages for thread ${threadId}`);
   await rateLimit();
   logInfo(`API CALL: list messages`);
-  const { data: messages } = await openai.beta.threads.messages.list(
-    threadId, { limit: 20, order: 'desc' }
-  );
+  const { data: messages } = await listThreadMessages(threadId, { limit: 20, order: 'desc' })
+  
+  await listThreadMessages(threadId, { limit: 20, order: 'desc' });
+
   let asst = messages.find(m => m.role === 'assistant');
   if (!asst || lastStatus !== 'completed') {
     const text = `⚠️ Error: run status ${lastStatus}`;

@@ -2,13 +2,20 @@
 import path from 'path';
 import * as fsp from 'fs/promises';
 import {
+  openai
+} from './openaiClient.js'
+
+import {
+  SAVED_DIR
+} from './openaiConfig.js'
+
+import {
   cancelRun,
   handlePrompt,
   loadConversation,
   saveConversation,
-  openai,
-  SAVED_DIR
 } from './openaiUtils.js';
+
 import {
   pendingConsoleHistory, 
   resetProject, 

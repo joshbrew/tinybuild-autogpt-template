@@ -9,6 +9,9 @@ import { createSession, createChannel } from 'better-sse';
 
 dotenv.config();
 
+export const RATE_LIMIT_INTERVAL_MS = 500; // Minimum interval between OpenAI API calls (500ms = 120 RPM)
+
+
 // ─── Utils for colored logging ─────────────────────────────────────────
 export const COLORS = {
   reset: "\x1b[0m",
@@ -217,7 +220,6 @@ export function flattenContent(contents) {
 }
 
 // ─── Rate Limiting ───────────────────────────────────────────────────
-const RATE_LIMIT_INTERVAL_MS = 500; // Minimum interval between OpenAI API calls (500ms = 120 RPM)
 let lastApiCallTime = 0;
 export async function rateLimit() {
   const now = Date.now();

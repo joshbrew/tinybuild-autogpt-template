@@ -15,7 +15,14 @@ export const TOKEN_LIMIT_PER_MIN =
 export const PRUNE_AT      = Math.round(TOKEN_LIMIT_PER_MIN*1.2/3);         // prune when ctxTokens exceed this
 export const KEEP_N_LIVE   = 10; // keep last N messages verbatim
 
-export const RUN_SAFE_MULT = 1.5;  //assume higher token count by x amount for run safety
+export const RUN_SAFE_MULT = 1.25;  //assume higher token count by x amount for run safety
 export const COMP_BUF      = 10_000; //5_000   // head-room for model reply
 export const HARD_CAP      = Math.round(TOKEN_LIMIT_PER_MIN*2/3);  // leave ≈ 10 k for the model’s reply
-export const EST_SAFE_MULT = 1.25;  // blanket safety factor
+
+
+import path from 'path'
+
+export const SAVED_DIR = process.env.SAVED_DIR ||
+  path.join(process.cwd(), 'gpt_dev/saved');
+
+export const ASSISTANT_FILE = path.join(SAVED_DIR, 'assistant.json');

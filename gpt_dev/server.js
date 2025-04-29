@@ -11,7 +11,7 @@ import {
   handleSse
 } from './serverUtil.js';
 
-import { SAVED_DIR } from './openaiUtils.js';
+import { SAVED_DIR } from './openaiConfig.js';
 import { routesConfig } from './openaiRoutes.js'; // object: pattern → methods
 
 // We don’t want to bind this server to 8080 (that’s your content server).
@@ -39,7 +39,10 @@ async function onRequest(req, res, cfg) {
   }
 
   const parsed = new URL(req.url || '/', `http://${req.headers.host}`);
-  const { pathname, searchParams } = parsed; console.log(parsed);
+  const { pathname, searchParams } = parsed;
+
+  console.log(req.method,"request: ", parsed?.href);
+  
   const method = req.method;
 
   // ① SSE endpoint:
@@ -54,8 +57,8 @@ async function onRequest(req, res, cfg) {
     return res.end('Upgrade Required');
   }
 
-  /* ② serve / or /gptdev -> /gpt_dev/gpt_dev.html */
-  if (method === 'GET' && (pathname === '/' || pathname === '/gptdev')) {
+  /* ② serve / or /gptdev (with or without trailing slash) -> /gpt_dev/gpt_dev.html */
+  if (method === 'GET' && (pathname === '/' || pathname === '/gptdev' || pathname === '/gptdev/')) {
     const filePath = path.join(process.cwd(), 'gpt_dev', 'gpt_dev.html');
     try {
       const stat = await fsp.stat(filePath);

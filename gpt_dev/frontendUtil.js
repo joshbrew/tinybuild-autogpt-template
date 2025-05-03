@@ -53,11 +53,12 @@ async function httpRequest(path, method = 'GET', body = null) {
   const opts = { method, headers: {} };
   if (body !== null) {
     opts.headers['Content-Type'] = 'application/json';
-    opts.body = JSON.stringify(body);
+    // only stringify if it’s not already a string
+    opts.body = typeof body === 'string' ? body : JSON.stringify(body);
   }
+  
   const res = await fetch(`${API_BASE}${path}`, opts);
   if (!res.ok) throw new Error(await res.text());
-  // DELETEs return 204; guard against empty body
   return res.status === 204 ? null : res.json();
 }
 

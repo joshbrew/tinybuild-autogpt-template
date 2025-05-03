@@ -714,13 +714,26 @@ Do NOT emit any extra text as it will be parsed directly into submitToolOutputs 
     max_tokens: SUMM_LIMIT
   });
 
-  // 4) parse the JSON array back into our summaries
+  // 4) parse the JSON array back into our summaries (with “salvage” fallback)
+  const raw = resp.choices[0].message.content.trim();
   let summaries;
+
   try {
-    summaries = JSON.parse(resp.choices[0].message.content);
+    summaries = JSON.parse(raw);
   } catch (err) {
-    throw new Error('[summarizePerCall] JSON parse error: ' + err.message);
+    // if there’s stray text after the JSON, grab only the first […] or {…} chunk
+    const m = raw.match(/^\s*(\[[\s\S]*?\]|\{[\s\S]*?\})/);
+    if (m) {
+      try {
+        summaries = JSON.parse(m[1]);
+      } catch (err2) {
+        throw new Error(`[summarizePerCall] JSON salvage failed: ${err2.message}`);
+      }
+    } else {
+      throw new Error('[summarizePerCall] JSON parse error: ' + err.message);
+    }
   }
+  
 
   // 5) submit those as a single payload
   await waitForRunCompletion(threadId, runId);
@@ -1059,7 +1072,7 @@ export async function waitForActiveRuns(threadId) {
     // Fetch the most recent 100 runs
     const res = await listThreadRuns(threadId, { limit: 100 });
     const liveRuns = res.data.filter(r =>
-      ['queued', 'in_progress', 'requires_action'].includes(r.status)
+      ['queued', 'in_progress'].includes(r.status)
     );
 
     // If none left, we’re done

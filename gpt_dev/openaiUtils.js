@@ -753,18 +753,19 @@ export async function submitToolOutputsSafe(
   // if it fits under TPM, send in one go
   if (fullTokens <= TOKEN_LIMIT_PER_MIN - COMP_BUF) {
     logInfo('[submitToolOutputsSafe] payload fits under TPM → sending all at once');
-
-    await waitForRunCompletion(threadId, runId);
+  
+    // throttle & send
     await throttleByTokens(fullTokens + COMP_BUF);
     await rateLimit();
     await submitRunToolOutputs(threadId, runId, { tool_outputs: toolOutputs });
     cycleAnswered(runId);
-    logSuccess('[submitToolOutputsSafe] full payload sent, please wait this may take a while. If it hangs too long restart the server.');
-
-    // unblock the run
-    await waitForRunCompletion(threadId, runId);
+    logSuccess('[submitToolOutputsSafe] full payload sent — now waiting on the run to finish…');
+  
+    // wait for absolutely everything (including any follow-on runs) to complete
+    await waitForActiveRuns(threadId);
     return;
   }
+  
 
   // otherwise summarise each call individually
   await summarizePerCall(threadId, runId, toolCalls, toolOutputs);

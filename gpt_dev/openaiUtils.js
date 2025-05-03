@@ -984,19 +984,16 @@ export async function handlePrompt({ prompt, threadId, title, systemPrompt }, sa
         allLogs.push(...fnLogs);
 
         // d) fetch the reply
-        const asst = await fetchAssistantReply(
-          convo.openaiThreadId,
-          fnLogs,
-          runAssistantLoop.lastStatus
-        );
-        checkCancel(convo.openaiThreadId);
+      const asst = await fetchAssistantReply(
+        convo.openaiThreadId,
+        runAssistantLoop.lastStatus
+      );
 
-        if (runAssistantLoop.lastStatus !== 'completed') {
-          throw new Error(`Run failed: ${runAssistantLoop.lastStatus}`);
-        }
+      if (runAssistantLoop.lastStatus !== 'completed') {
+        throw new Error(`Run failed: ${runAssistantLoop.lastStatus}`);
+      }
 
-        // e) record & optionally handle self-prompt loops
-        convo.messages.push(asst);
+      convo.messages.push(asst);
 
         let sp = selfPrompt;
         while (sp) {
@@ -1208,7 +1205,6 @@ export async function handleSelfPrompt(threadId, assistantId, selfPrompt) {
   // 1d. Once completed, fetch the assistant’s reply
   const asstMsg = await fetchAssistantReply(
     threadId,
-    fnLogs,
     runAssistantLoop.lastStatus
   );
 

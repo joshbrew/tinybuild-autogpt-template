@@ -147,7 +147,7 @@ export const functionSchemas = [
     },
     {
         name: 'smart_chat',
-        description: 'Run a chat completion on the SMART_MODEL; returns the assistant’s reply',
+        description: 'Run a chat completion on the SMART_MODEL; returns the assistant’s reply. You should use this to get better code completion results e.g. by uploading tool call responses to it and asking it for specifically formatted code. VERY IMPORTANT since your model is more limited for better logical or stylistically sophisticated code. But this is just a chat completion it has no memory so give it proper context..',
         parameters: {
           type: 'object',
           properties: {

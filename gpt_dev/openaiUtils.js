@@ -23,7 +23,7 @@ import {
   MODEL_LIMITS, SUMM_LIMIT,
   TOKEN_LIMIT_PER_MIN, PRUNE_AT, KEEP_N_LIVE,
   RUN_SAFE_MULT, COMP_BUF, HARD_CAP, 
-  ASSISTANT_FILE, SAVED_DIR
+  ASSISTANT_FILE, SAVED_DIR, PRUNED_SUMMARY_TOKENS
 } from './openaiConfig.js'
 
 import { 
@@ -417,7 +417,7 @@ async function pruneThread(threadId, keepN = KEEP_N_LIVE) {
       { role: 'system', content: 'Summarise the following conversation briefly & accurately:' },
       ...head.map(m => ({ role: m.role, content: flattenContent(m.content) }))
     ],
-    max_tokens: 256,
+    max_tokens: PRUNED_SUMMARY_TOKENS,
     temperature: 0.2
   });
   const summary = summaryResp.choices[0].message.content.trim();

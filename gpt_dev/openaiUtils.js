@@ -592,11 +592,15 @@ export async function createRunWithRateLimitRetry(threadId, assistantId, userPro
       break;
     } catch (err) {
       if (err.message.includes('rate_limit_exceeded')) {
-        const m = err.message.match(/try again in\s*([\d.]+)s/i);
-        const backoff = m ? parseFloat(m[1]) * 1000 : 60_000;
-        logWarn(`Run creation rate-limited, sleeping ${backoff}ms…`);
-        await new Promise(r => setTimeout(r, backoff));
-      } else {
+        // existing sleep/back-off…
+      }
+      else if (err.message.includes('already has an active run')) {
+        logWarn(`[createRun] active run detected, waiting for it to finish…`);
+        await waitForActiveRuns(threadId);
+        // now retry
+        continue;
+      }
+      else {
         throw err;
       }
     }
@@ -1072,7 +1076,7 @@ export async function waitForActiveRuns(threadId) {
     // Fetch the most recent 100 runs
     const res = await listThreadRuns(threadId, { limit: 100 });
     const liveRuns = res.data.filter(r =>
-      ['queued', 'in_progress'].includes(r.status)
+      ['queued', 'in_progress', 'requires_action'].includes(r.status)
     );
 
     // If none left, we’re done

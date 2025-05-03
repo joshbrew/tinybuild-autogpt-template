@@ -12,17 +12,15 @@ import {
 } from './serverUtil.js';
 
 import { SAVED_DIR } from './openaiConfig.js';
-import { routesConfig } from './openaiRoutes.js'; // object: pattern → methods
+import { routesConfig } from './openaiRoutes.js';
 
-// We don’t want to bind this server to 8080 (that’s your content server).
-// Default API/WebSocket port is 3000.
+// Default API/WebSocket port is 3000 (content on 8080 elsewhere)
 const serverConfig = {
-  protocol:  'http',
-  host:      getEnvVar('HOST', 'localhost'),
-  port:      Number(getEnvVar('PORT', '3000'))
+  protocol: 'http',
+  host:     getEnvVar('HOST', 'localhost'),
+  port:     Number(getEnvVar('PORT', '3000'))
 };
 
-// Ensure the saved-folder exists & start up
 async function init() {
   await fsp.mkdir(SAVED_DIR, { recursive: true });
   startServer(serverConfig);
@@ -40,24 +38,20 @@ async function onRequest(req, res, cfg) {
 
   const parsed = new URL(req.url || '/', `http://${req.headers.host}`);
   const { pathname, searchParams } = parsed;
-
-  console.log(req.method,"request: ", parsed?.href);
-  
   const method = req.method;
+  console.log(method, 'request:', parsed.href);
 
-  // ① SSE endpoint:
+  // SSE endpoint
   if (pathname === '/events') {
-    // this will set text/event-stream headers
     return handleSse(req, res);
   }
-
-  // If this is the WS endpoint, we’ll handle it in createServer’s upgrade listener
+  // WS endpoint
   if (pathname === '/ws') {
     res.writeHead(426, { 'Content-Type': 'text/plain' });
     return res.end('Upgrade Required');
   }
 
-  /* ② serve / or /gptdev (with or without trailing slash) -> /gpt_dev/gpt_dev.html */
+  // Serve root HTML
   if (method === 'GET' && (pathname === '/' || pathname === '/gptdev' || pathname === '/gptdev/')) {
     const filePath = path.join(process.cwd(), 'gpt_dev', 'gpt_dev.html');
     try {
@@ -75,90 +69,93 @@ async function onRequest(req, res, cfg) {
     return;
   }
 
-  // --- Route dispatch ---
-  // 1) Exact‐match
-  let handler = routesConfig[pathname]?.[method];
-  let params  = {};
+  // --- General static file serving ---
+  if (method === 'GET') {
+    // Resolve local file path relative to project root
+    let safePath = path.normalize(path.join(process.cwd(), pathname));
+    if (safePath.startsWith(process.cwd())) {
+      try {
+        const stat = await fsp.stat(safePath);
+        if (stat.isFile()) {
+          // Determine MIME type
+          const ext = path.extname(safePath).toLowerCase();
+          const mimeTypes = {
+            '.js':   'application/javascript',
+            '.css':  'text/css',
+            '.html': 'text/html; charset=utf-8',
+            '.json': 'application/json',
+            '.png':  'image/png',
+            '.jpg':  'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.svg':  'image/svg+xml',
+            '.ico':  'image/x-icon'
+          };
+          const contentType = mimeTypes[ext] || 'application/octet-stream';
+          res.writeHead(200, {
+            'Content-Type': contentType,
+            'Content-Length': stat.size
+          });
+          return fs.createReadStream(safePath).pipe(res);
+        }
+      } catch {
+        // File doesn't exist, fall through to route dispatch
+      }
+    }
+  }
 
-  // 2) Parameterized match
+  // --- API route dispatch ---
+  let handler = routesConfig[pathname]?.[method];
+  let params = {};
   if (!handler) {
     for (const [pattern, methods] of Object.entries(routesConfig)) {
       if (!pattern.includes('/:')) continue;
       const parts = pattern.split('/').filter(Boolean);
       const segs  = pathname.split('/').filter(Boolean);
       if (parts.length !== segs.length) continue;
-
       const paramNames = [];
       const regex = new RegExp(
-        '^/' +
-          parts
-            .map(p => {
-              if (p.startsWith(':')) {
-                paramNames.push(p.slice(1));
-                return '([^/]+)';
-              }
-              return p.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&');
-            })
-            .join('/') +
-          '/?$'
+        '^/' + parts.map(p => p.startsWith(':')
+          ? (() => { paramNames.push(p.slice(1)); return '([^/]*)'; })()
+          : p.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&')
+        ).join('/') + '/?$'
       );
       const m = pathname.match(regex);
       if (!m) continue;
-
       const mhandler = methods[method];
       if (mhandler) {
         handler = mhandler;
-        params = paramNames.reduce((o, name, i) => {
-          o[name] = decodeURIComponent(m[i + 1]);
-          return o;
-        }, {});
+        params = paramNames.reduce((o, name, i) => (o[name] = decodeURIComponent(m[i+1]), o), {});
         break;
       }
     }
   }
 
   if (handler) {
-    const ctx = createHttpContext(
-      req,
-      res,
-      params,
-      Object.fromEntries(searchParams)
-    );
-    return Promise.resolve(handler(ctx))
-      .catch(err => {
-        console.error(err);
-        res.writeHead(500, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ error: 'Internal Server Error' }));
-      });
+    const ctx = createHttpContext(req, res, params, Object.fromEntries(searchParams));
+    return Promise.resolve(handler(ctx)).catch(err => {
+      console.error(err);
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Internal Server Error' }));
+    });
   }
 
-  // No match → 404
+  // Not found
   res.writeHead(404, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ error: 'Not Found' }));
 }
 
 function createServer(cfg) {
-  const handler = (req, res) => onRequest(req, res, cfg);
-
   const server = cfg.protocol === 'https'
-    ? https.createServer({
-        key:  fs.readFileSync(cfg.keypath),
-        cert: fs.readFileSync(cfg.certpath)
-      }, handler)
-    : http.createServer(handler);
-
-  // Attach WS handler once, using the same routesConfig
+    ? https.createServer({ key: fs.readFileSync(cfg.keypath), cert: fs.readFileSync(cfg.certpath) }, onRequest)
+    : http.createServer((req, res) => onRequest(req, res, cfg));
   attachWebSocketHandler(server);
-
   return server;
 }
 
 function startServer(cfg) {
   const server = createServer(cfg);
   server.listen(cfg.port, cfg.host, () => {
-    console.log(`🚀 API & WS server running at http://${cfg.host}:${cfg.port}/`);
-    console.log(`   → HTTP API on http://${cfg.host}:${cfg.port}/api/...`);
-    console.log(`   → WS    on ws://${cfg.host}:${cfg.port}/ws`);
+    console.log(`🚀 Server running at http://${cfg.host}:${cfg.port}/`);
   });
 }
 

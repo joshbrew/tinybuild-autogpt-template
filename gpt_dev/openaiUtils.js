@@ -759,7 +759,7 @@ export async function submitToolOutputsSafe(
     await rateLimit();
     await submitRunToolOutputs(threadId, runId, { tool_outputs: toolOutputs });
     cycleAnswered(runId);
-    logSuccess('[submitToolOutputsSafe] full payload sent, please wait this may take a while.');
+    logSuccess('[submitToolOutputsSafe] full payload sent, please wait this may take a while. If it hangs too long restart the server.');
 
     // unblock the run
     await waitForRunCompletion(threadId, runId);
@@ -1150,28 +1150,40 @@ export async function runAssistantLoop(threadId, assistantId, instructions) {
 
 
 // ─── Fetch or fallback assistant reply ────────────────────────────────
-export async function fetchAssistantReply(threadId, fnLogs, lastStatus) {
+export async function fetchAssistantReply(threadId, lastStatus) {
   checkCancel(threadId);
-  logInfo(`Listing last messages for thread ${threadId}`);
-  await rateLimit();
-  logInfo(`API CALL: list messages`);
-  const { data: messages } = await listThreadMessages(threadId, { limit: 20, order: 'desc' })
-  
-  await listThreadMessages(threadId, { limit: 20, order: 'desc' });
+  logInfo(`Fetching latest assistant reply for thread ${threadId}`);
 
-  let asst = messages.find(m => m.role === 'assistant');
-  if (!asst || lastStatus !== 'completed') {
-    const text = `⚠️ Error: run status ${lastStatus}`;
-    logWarn(`No completed assistant message, synthesizing error reply`);
-    asst = {
-      id: `synthetic_${Date.now()}`,
-      role: 'assistant',
-      created_at: Math.floor(Date.now()/1000),
-      content: [{ type:'text', text: { value: text, annotations: [] } }]
-    };
-  }
-  return asst;
+  let cursor = null;
+  do {
+    await rateLimit();
+    logInfo(`API CALL: list messages (cursor=${cursor})`);
+    const res = await listThreadMessages(threadId, {
+      limit: 100,
+      order: 'desc',
+      ...(cursor ? { cursor } : {})
+    });
+
+    // look for the first assistant message in this page
+    const asst = res.data.find(m => m.role === 'assistant');
+    if (asst && lastStatus === 'completed') {
+      return asst;
+    }
+
+    cursor = res.next_cursor;
+  } while (cursor);
+
+  // if we ran out of messages without finding one, synthesize an error
+  logWarn(`No completed assistant message found (status=${lastStatus})`);
+  const text = `⚠️ Error: run status ${lastStatus}`;
+  return {
+    id: `synthetic_${Date.now()}`,
+    role: 'assistant',
+    created_at: Math.floor(Date.now() / 1000),
+    content: [{ type: 'text', text: { value: text, annotations: [] } }]
+  };
 }
+
 
 // ─── Self-prompt continuation ────────────────────────────────────────
 export async function handleSelfPrompt(threadId, assistantId, selfPrompt) {

@@ -172,7 +172,7 @@ export const functionSchemas = [
               type: 'number',
               description: 'Sampling temperature (defaults to 0.7)'
             },
-            max_tokens: {
+            max_completion_tokens: {
               type: 'integer',
               description: 'Maximum tokens to generate (defaults to model max)'
             },

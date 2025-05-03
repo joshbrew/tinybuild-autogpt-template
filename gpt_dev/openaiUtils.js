@@ -256,12 +256,16 @@ export async function runToolCalls(toolCalls, threadId) {
       }
 
       case 'smart_chat': {
-        const { messages, temperature = 0.7, max_tokens } = args;
+        const { 
+          messages, 
+          temperature,
+          max_completion_tokens 
+        } = args;
         const resp = await createChatCompletion({
           model: SMART_MODEL,
           messages,
-          temperature,
-          max_tokens
+          //temperature,
+          max_completion_tokens
         });
         const reply = resp.choices?.[0]?.message?.content ?? '';
         result = JSON.stringify({ reply });

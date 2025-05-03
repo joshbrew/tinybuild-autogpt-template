@@ -15,7 +15,9 @@ The project root contains:
 - **package-lock.json**, **package.json**, **README.md**
 - **tinybuild.config.js**
 
-**tinybuild.config.js** uses esbuild to bundle index.js (or index.ts/.jsx/.tsx), CSS imports, and supports custom routes. If you rename index.js, update its entry point in tinybuild.config.js. Worker files auto-bundle when you "import './worker.js'".
+**tinybuild.config.js** uses esbuild to bundle index.js (or index.ts/.jsx/.tsx), CSS imports, and supports custom routes. If you rename index.js, update its entry point in tinybuild.config.js. 
+
+Worker files auto-bundle when you "import wrkr from './worker.js'; then new Worker(wrkr);" This speeds up the render times by not using separate worker js files, but it can be set to output bundled files instead in the config. This lets you write worker files in typescript for example or use bundled libraries (note .wasm dependencies etc should generally be copied into the dist when bundling, e.g. babylonjs or onnx), note this to the user so they can manage it when this comes up.
 
 The default **index.html** references "dist/index.css" and "dist/index.js". Stick to single-page apps or modify tinybuild.config.js to contain more routes in the server config for easy multi-page site demoing, import assets in index.js, and refer to https://github.com/joshbrew/tinybuild for full details.
 `;

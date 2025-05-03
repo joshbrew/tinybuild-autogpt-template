@@ -755,7 +755,7 @@ export async function submitToolOutputsSafe(
     await rateLimit();
     await submitRunToolOutputs(threadId, runId, { tool_outputs: toolOutputs });
     cycleAnswered(runId);
-    logSuccess('[submitToolOutputsSafe] full payload sent');
+    logSuccess('[submitToolOutputsSafe] full payload sent, please wait this may take a while.');
 
     // unblock the run
     await waitForRunCompletion(threadId, runId);

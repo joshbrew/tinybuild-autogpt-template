@@ -2,15 +2,16 @@
 import path from 'path';
 import * as fsp from 'fs/promises';
 import {
-  openai
+  openai,
+  requestCancel
 } from './openaiClient.js'
 
 import {
   SAVED_DIR
-} from './openaiConfig.js'
+} from './clientConfig.js'
 
 import {
-  cancelRun,
+  cancelActiveRuns,
   handlePrompt,
   loadConversation,
   saveConversation,
@@ -311,6 +312,29 @@ async function postConsoleHistory(ctx) {
   // 204 = no content
   ctx.res.writeHead(204);
   ctx.res.end();
+}
+
+export async function cancelRun(ctx) {
+  const { thread_id } = ctx.params;
+  let convo;
+
+  try {
+    convo = await loadConversation(path.join(SAVED_DIR, `${thread_id}.txt`));
+  } catch {
+    return ctx.json(404, { error: 'Thread not found' });
+  }
+  if (!convo.openaiThreadId) {
+    return ctx.json(404, { error: 'No OpenAI thread mapped' });
+  }
+
+  // mark cancellation
+  requestCancel(convo.openaiThreadId);
+
+  try {
+    return ctx.json(200, { canceled: true });
+  } catch (err) {
+    return ctx.json(500, { error: err.message });
+  }
 }
 
 // --- Route definitions and matchers ---

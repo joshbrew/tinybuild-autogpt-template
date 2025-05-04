@@ -308,18 +308,3 @@ export function unlockThread(threadId) {
 }
 
 
-// Track user‐requested cancels
-const cancelFlags = new Map();
-
-/** Mark this thread as “please cancel” */
-export function requestCancel(threadId) {
-  cancelFlags.set(threadId, true);
-}
-
-/** Throw if someone asked to cancel this thread */
-export function checkCancel(threadId) {
-  if (cancelFlags.get(threadId)) {
-    cancelFlags.delete(threadId);
-    throw new Error('Cancelled by user');
-  }
-}

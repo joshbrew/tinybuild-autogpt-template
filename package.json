@@ -6,7 +6,8 @@
   "types": "./dist/index.d.ts",
   "type": "module",
   "scripts": {
-    "start": "concurrently \"tinybuild\" \"node ./gpt_dev/server.js\""
+    "start": "concurrently \"tinybuild\" \"node ./gpt_dev/server.js\"",
+    "preinstall": "npm i -g tinybuild concurrently"
   },
   "author": "",
   "license": "",

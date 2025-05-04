@@ -11,8 +11,16 @@ import {
   handleSse
 } from './serverUtil.js';
 
-import { SAVED_DIR } from './openaiConfig.js';
-import { routesConfig } from './openaiRoutes.js';
+import { SAVED_DIR } from './clientConfig.js';
+import { routesConfig as openaiRoutes } from './openaiRoutes.js';
+import { routesConfig as gitRoutes } from './gitHelper.js'
+
+
+//aggregate route definitions
+const routesConfig = {
+  ...openaiRoutes,
+  ...gitRoutes
+};
 
 // Default API/WebSocket port is 3000 (content on 8080 elsewhere)
 const serverConfig = {

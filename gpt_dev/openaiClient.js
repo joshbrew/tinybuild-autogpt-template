@@ -143,3 +143,27 @@ export async function createChatCompletion(params) {
     return openai.beta.assistants.del(assistantId);
   }
   
+// Track user‐requested cancels
+const cancelFlags = new Map();
+
+
+/** Throw if someone asked to cancel this thread */
+export function checkCancel(threadId) {
+  if (cancelFlags.get(threadId)) {
+    cancelFlags.delete(threadId);
+    throw new Error('Cancelled by user');
+  }
+}
+
+
+  /**
+ * Request cancellation of a specific run in a thread.
+ * @param {string} threadId - OpenAI thread ID
+ * @param {string} runId    - Run ID to cancel
+ * @returns {Promise<Object>} - The canceled run object
+ */
+export async function requestCancel(threadId, runId) {
+  cancelFlags.set(threadId, true);
+  return openai.beta.threads.runs.cancel(threadId, runId);
+}
+

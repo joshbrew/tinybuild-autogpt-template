@@ -7,34 +7,44 @@ import http from 'http';
 import https from 'https';
 import { exec } from 'child_process';
 import {
-  flattenContent, 
-  sseChannel, 
+  flattenContent,
+  sseChannel,
   pendingConsoleHistory, makeFileWalker,
-  rateLimit, lockThread, unlockThread, checkCancel, requestCancel,
+  rateLimit, lockThread, unlockThread, 
   logError, logInfo, logSuccess, logWarn
 } from './serverUtil.js'
 
-import{ DEFAULT_SYSTEM_PROMPT } from './openaiSystemPrompt.js'
+import { DEFAULT_SYSTEM_PROMPT } from './openaiSystemPrompt.js'
 import { functionSchemas, tools } from './openaiToolCalls.js';
+
+import {
+  ensureLocalRepo, commitGitSnapshot,
+  restoreBranch, restoreFilesFromRef,
+  listBranches, listVersions,
+  createBranch, getChangelog,
+  deleteBranch, mergeBranch,
+  pushBranch, pullBranch
+} from './gitHelper.js';
 
 
 import {
   BASE_MODEL, SUMM_MODEL, SMART_MODEL,
   MODEL_LIMITS, SUMM_LIMIT,
   TOKEN_LIMIT_PER_MIN, PRUNE_AT, KEEP_N_LIVE,
-  RUN_SAFE_MULT, COMP_BUF, HARD_CAP, 
+  RUN_SAFE_MULT, COMP_BUF, HARD_CAP,
   ASSISTANT_FILE, SAVED_DIR, PRUNED_SUMMARY_TOKENS
-} from './openaiConfig.js'
+} from './clientConfig.js'
 
-import { 
-  openai, 
-  listThreadMessages, listThreadRuns, 
-  createChatCompletion, 
-  createThread, createThreadRun, 
+import {
+  openai,
+  listThreadMessages, listThreadRuns,
+  createChatCompletion,
+  createThread, createThreadRun,
   createThreadMessage, deleteThreadMessage,
-  submitRunToolOutputs, 
+  submitRunToolOutputs,
   createAssistant, deleteAssistant,
-  retrieveThreadRun
+  retrieveThreadRun,
+  checkCancel, requestCancel,
 } from './openaiClient.js';
 
 import dotenv from 'dotenv';
@@ -43,6 +53,7 @@ dotenv.config();
 
 // ─── Tool‐calling runner, see function schemas in openaiToolCalls.js  ───────────────────────────────────────────────
 export async function runToolCalls(toolCalls, threadId) {
+  let didWriteOp = false;  // flag for any file manipulations
   const fnLogs = [], follow = [];
   let selfPrompt = null;
   const root = process.cwd();
@@ -55,19 +66,22 @@ export async function runToolCalls(toolCalls, threadId) {
     const args = JSON.parse(tc.function?.arguments ?? tc.arguments);
     let result = '';
 
-    switch (name) {
+    logInfo("⚡ Assistant called: " + name);
+    // 1) Log the call immediately
+    fnLogs.push({ type: 'function_call', name, arguments: args });
 
+    switch (name) {
       case 'read_file': {
         const fp = safe(args.folder, args.filename);
         let txt, st;
         try {
           txt = await fs.readFile(fp, 'utf-8');
-          st  = await fs.stat(fp);
+          st = await fs.stat(fp);
         } catch (err) {
           if (err.code === 'ENOENT') {
             // fallback to empty content (or signal error back to ChatGPT)
             result = JSON.stringify({
-              content:    '',
+              content: '',
               byteLength: 0,
               modifiedTime: null
             });
@@ -82,18 +96,19 @@ export async function runToolCalls(toolCalls, threadId) {
         });
         break;
       }
-      
+
       case 'write_file': {
+        didWriteOp = true;
         const dir = safe(args.folder);
-        await fs.mkdir(dir, { recursive:true });
+        await fs.mkdir(dir, { recursive: true });
         const fp = safe(args.folder, args.filename);
         let existing = '';
-        try { existing = await fs.readFile(fp, 'utf-8'); } catch {}
+        try { existing = await fs.readFile(fp, 'utf-8'); } catch { }
         let out = args.content;
         if (args.replace_range) {
           out = existing.slice(0, args.replace_range.start)
-              + args.content
-              + existing.slice(args.replace_range.end);
+            + args.content
+            + existing.slice(args.replace_range.end);
         } else if (Number.isInteger(args.insert_at)) {
           const p = args.insert_at;
           out = existing.slice(0, p) + args.content + existing.slice(p);
@@ -105,40 +120,34 @@ export async function runToolCalls(toolCalls, threadId) {
       }
 
       case 'copy_file': {
+        didWriteOp = true;
         const src = safe(args.source);
         const dst = safe(args.destination);
-        const root = process.cwd();
-      
-        // 1) Ensure neither path escapes the project root
         if (!src.startsWith(root + path.sep) || !dst.startsWith(root + path.sep)) {
           result = `Error: invalid path (outside project root)`;
           break;
         }
-      
+        await fs.mkdir(path.dirname(dst), { recursive: true });
         try {
-          // 2) Ensure the destination directory exists
-          await fs.mkdir(path.dirname(dst), { recursive: true });
-          // 3) Attempt the copy
           await fs.copyFile(src, dst);
           result = `Copied ${args.source} → ${args.destination}`;
         } catch (err) {
-          // 4) Missing source file? handle gracefully
           if (err.code === 'ENOENT') {
             result = `Error copying "${args.source}": file not found`;
             break;
           }
-          // 5) Otherwise re-throw
           throw err;
         }
         break;
       }
 
       case 'fetch_file': {
+        didWriteOp = true;
         const url = args.url;
         const dst = safe(args.destination);
         // ensure destination directory exists
         await fs.mkdir(path.dirname(dst), { recursive: true });
-      
+
         let succeeded = false;
         try {
           await new Promise((resolve, reject) => {
@@ -154,7 +163,7 @@ export async function runToolCalls(toolCalls, threadId) {
             });
             req.once('error', err => {
               // clean up partial file
-              fsSync.unlink(dst, () => {});
+              fsSync.unlink(dst, () => { });
               reject(err);
             });
           });
@@ -163,7 +172,7 @@ export async function runToolCalls(toolCalls, threadId) {
           // gracefully capture the error
           result = `Error fetching "${url}": ${err.message}`;
         }
-      
+
         if (succeeded) {
           result = `Fetched ${url} → ${args.destination}`;
         }
@@ -173,12 +182,12 @@ export async function runToolCalls(toolCalls, threadId) {
       case 'list_directory': {
         const folder = args.folder || '.';
         const absPath = safe(folder);
-      
+
         // guard against “no such directory”
         let items = [];
         try {
           const walker = makeFileWalker({
-            recursive:         args.recursive,
+            recursive: args.recursive,
             skip_node_modules: args.skip_node_modules !== false,
             deep_node_modules: args.deep_node_modules === true,
           });
@@ -191,21 +200,23 @@ export async function runToolCalls(toolCalls, threadId) {
             throw err;
           }
         }
-      
+
         result = JSON.stringify(items);
         break;
       }
 
       case 'move_file': {
+        didWriteOp = true;
         const src = safe(args.source);
         const dst = safe(args.destination);
-        await fs.mkdir(path.dirname(dst), { recursive:true });
+        await fs.mkdir(path.dirname(dst), { recursive: true });
         await fs.rename(src, dst);
         result = `Moved ${args.source} → ${args.destination}`;
         break;
       }
 
       case 'remove_directory': {
+        didWriteOp = true;
         await fs.rm(safe(args.folder), {
           recursive: args.recursive !== false,
           force: true
@@ -215,6 +226,7 @@ export async function runToolCalls(toolCalls, threadId) {
       }
 
       case 'rename_file': {
+        didWriteOp = true;
         const dir = safe(args.folder);
         await fs.rename(
           path.join(dir, args.old_filename),
@@ -225,6 +237,7 @@ export async function runToolCalls(toolCalls, threadId) {
       }
 
       case 'reset_project': {
+        didWriteOp = true;
         const msg = await resetProject();
         result = msg;
         break;
@@ -232,9 +245,9 @@ export async function runToolCalls(toolCalls, threadId) {
 
       case 'run_shell': {
         console.log("Shell running: ", args.command);
-        if(args.command === 'npm run build') {
+        if (args.command === 'npm run build') {
           result = "Illegal command."
-          break; 
+          break;
         }
         result = await new Promise(resolve => {
           exec(args.command, { cwd: root, shell: true }, (err, stdout, stderr) => {
@@ -256,10 +269,10 @@ export async function runToolCalls(toolCalls, threadId) {
       }
 
       case 'smart_chat': {
-        const { 
-          messages, 
+        const {
+          messages,
           temperature,
-          max_completion_tokens 
+          max_completion_tokens
         } = args;
         const resp = await createChatCompletion({
           model: SMART_MODEL,
@@ -274,9 +287,9 @@ export async function runToolCalls(toolCalls, threadId) {
 
       case 'get_console_history': {
         // 1) create a request id and broadcast SSE
-        const id = Math.random()*1000000000000000;
-        sseChannel.broadcast(JSON.stringify({ type:'request_console_history', id }), 'console');
-      
+        const id = Math.random() * 1000000000000000;
+        sseChannel.broadcast(JSON.stringify({ type: 'request_console_history', id }), 'console');
+
         // 2) wait for POST /api/console_history to resolve
         const history = await new Promise((resolve, reject) => {
           // keep resolver so the HTTP endpoint can call it
@@ -285,10 +298,145 @@ export async function runToolCalls(toolCalls, threadId) {
           setTimeout(() => {
             pendingConsoleHistory.delete(id);
             reject(new Error('console history timeout'));
-          }, 15_000);
+          }, 10_000);
         });
-      
+
         result = JSON.stringify(history);
+        break;
+      }
+
+      // ─── Git snapshot ───────────────────────────────────────────────────────────
+      case 'commit_git_snapshot': {
+        didWriteOp = true;
+        try {
+          await commitGitSnapshot(args.dir);
+          result = JSON.stringify({ message: `Committed snapshot in ${args.dir}` });
+        } catch (err) {
+          result = `Error: ${err.message}`;
+        }
+        break;
+      }
+
+      // ─── Git history & diffs ─────────────────────────────────────────────────────
+      case 'list_versions': {
+        try {
+          const versions = await listVersions(args.dir, args.maxCount);
+          result = JSON.stringify({ versions });
+        } catch (err) {
+          result = `Error: ${err.message}`;
+        }
+        break;
+      }
+
+      case 'get_changelog': {
+        if (!args.ref) {
+          result = 'Error: missing ref';
+          break;
+        }
+        try {
+          const changelog = await getChangelog(args.dir, args.ref);
+          result = JSON.stringify({ changelog });
+        } catch (err) {
+          result = `Error: ${err.message}`;
+        }
+        break;
+      }
+
+      // ─── Git branch management ───────────────────────────────────────────────────
+      case 'list_branches': {
+        try {
+          const branches = await listBranches(args.dir);
+          result = JSON.stringify({ branches });
+        } catch (err) {
+          result = `Error: ${err.message}`;
+        }
+        break;
+      }
+
+      case 'create_branch': {
+        didWriteOp = true;
+        try {
+          await createBranch(args.dir, args.branch, args.remote, args.startPoint);
+          result = JSON.stringify({ message: `Created branch '${args.branch}'` });
+        } catch (err) {
+          result = `Error: ${err.message}`;
+        }
+        break;
+      }
+
+      case 'delete_branch': {
+        didWriteOp = true;
+        try {
+          await deleteBranch(args.dir, args.branch, args.remote, args.force);
+          result = JSON.stringify({ message: `Deleted branch '${args.branch}'${args.remote ? ` on ${args.remote}` : ''}` });
+        } catch (err) {
+          result = `Error: ${err.message}`;
+        }
+        break;
+      }
+
+      case 'restore_branch': {
+        didWriteOp = true;
+        try {
+          await restoreBranch(args.dir, args.branch, args.remote);
+          result = JSON.stringify({ message: `Checked out '${args.branch}'${args.remote ? ` from ${args.remote}` : ''}` });
+        } catch (err) {
+          result = `Error: ${err.message}`;
+        }
+        break;
+      }
+
+      case 'merge_branch': {
+        didWriteOp = true;
+        try {
+          await mergeBranch(
+            args.dir,
+            args.sourceBranch, args.sourceRemote,
+            args.targetBranch, args.targetRemote
+          );
+          result = JSON.stringify({
+            message: `Merged '${args.sourceBranch}'${args.sourceRemote ? ` from ${args.sourceRemote}` : ''} into '${args.targetBranch}'`
+          });
+        } catch (err) {
+          result = `Error: ${err.message}`;
+        }
+        break;
+      }
+
+      // ─── Git push & pull ─────────────────────────────────────────────────────────
+      case 'push_branch': {
+        try {
+          await pushBranch(args.dir, args.branch, args.remote);
+          result = JSON.stringify({ message: `Pushed '${args.branch}' to '${args.remote || 'origin'}'` });
+        } catch (err) {
+          result = `Error: ${err.message}`;
+        }
+        break;
+      }
+
+      case 'pull_branch': {
+        try {
+          await pullBranch(args.dir, args.branch, args.remote);
+          result = JSON.stringify({ message: `Pulled '${args.branch}'${args.remote ? ` from ${args.remote}` : ''}` });
+        } catch (err) {
+          result = `Error: ${err.message}`;
+        }
+        break;
+      }
+
+      // ─── Git file restore ─────────────────────────────────────────────────────────
+      case 'restore_files_from_ref': {
+        didWriteOp = true;
+        if (!args.ref || !args.files) {
+          result = 'Error: missing ref or files';
+          break;
+        }
+        try {
+          await restoreFilesFromRef(args.dir, args.ref, args.files);
+          result = JSON.stringify({ message: `Restored files from '${args.ref}'` });
+        } catch (err) {
+          result = `Error: ${err.message}`;
+        }
         break;
       }
 
@@ -301,21 +449,14 @@ export async function runToolCalls(toolCalls, threadId) {
       [{ type: 'text', text: result }]             // mimics the message body
     );
 
-    fnLogs.push({ type:'function_call', name, arguments:args });
-    fnLogs.push({ type:'function_result', name, result });
+    fnLogs.push({ type: 'function_result', name, result });
     follow.push(
-      { role:'assistant', tool_calls:[tc] },
-      { role:'tool', tool_call_id:tc.id, name, content:result }
+      { role: 'assistant', tool_calls: [tc] },
+      { role: 'tool', tool_call_id: tc.id, name, content: result }
     );
   }
 
-  fnLogs.forEach((l) => {
-    if(l?.type === 'function_call') { 
-      console.log("Assistant called", l.name);
-    }
-  });
-
-  return { fnLogs, follow, selfPrompt };
+  return { fnLogs, follow, selfPrompt, didWriteOp };
 }
 
 
@@ -375,14 +516,14 @@ async function shrinkContextIfNeeded(threadId, extra = 0) {
  * `keepN` lets the caller keep fewer live messages for aggressive shrinking.
  */
 async function pruneThread(threadId, keepN = KEEP_N_LIVE) {
-  
+
   function shouldPrune(threadId, extra = 0) {
     const ctx = threadTokenTally.get(threadId) || 0;
     return ctx + extra + COMP_BUF > HARD_CAP;
   }
 
-  if(!shouldPrune(threadId)) return;
-  
+  if (!shouldPrune(threadId)) return;
+
   const ctxTok = threadTokenTally.get(threadId) || 0;
   if (ctxTok < PRUNE_AT && keepN === KEEP_N_LIVE) {
     logInfo(`[pruneThread] ctx=${ctxTok} < PRUNE_AT (${PRUNE_AT}) – skip`);
@@ -403,9 +544,9 @@ async function pruneThread(threadId, keepN = KEEP_N_LIVE) {
 
   /* 2) strip always-dropped roles that are *not* in the live tail */
   const tailStart = Math.max(0, all.length - keepN);
-  const head      = all.slice(0, tailStart)
-                       .filter(m => !ROLES_TO_DROP.includes(m.role));
-  const liveTail  = all.slice(tailStart);   // keep tail verbatim
+  const head = all.slice(0, tailStart)
+    .filter(m => !ROLES_TO_DROP.includes(m.role));
+  const liveTail = all.slice(tailStart);   // keep tail verbatim
 
   if (head.length === 0) {            // nothing left to summarise
     logInfo('[pruneThread] nothing to summarise after role-filter');
@@ -517,7 +658,7 @@ export async function initConversation(threadId, title, savedDir) {
     logInfo(`API CALL: create thread`);
     const thread = await createThread();
     localId = thread.id;
-    convo   = { messages: [], openaiThreadId: thread.id, title: title || '' };
+    convo = { messages: [], openaiThreadId: thread.id, title: title || '' };
     logSuccess(`Thread created ${thread.id}`);
   }
 
@@ -551,7 +692,7 @@ export async function postUserMessage(openaiThreadId, prompt) {
   logInfo(`API CALL: postUserMessage to thread ${openaiThreadId}`);
   const msg = await safeCreateMessage(openaiThreadId, {
     role: 'user',
-    content: [{ type:'text', text: prompt.trim() }]
+    content: [{ type: 'text', text: prompt.trim() }]
   });
   return msg;
 }
@@ -559,19 +700,19 @@ export async function postUserMessage(openaiThreadId, prompt) {
 // ─── Thread & run helpers ────────────────────────────────────────────
 export async function createRunWithRateLimitRetry(threadId, assistantId, userPrompt, tools) {
   const instrString = userPrompt.trim();
-  const instrTok    = estimateTokensFromString(instrString);
+  const instrTok = estimateTokensFromString(instrString);
 
   // ensure context will still fit
-  const COMP_BUF = 5_000;                
+  const COMP_BUF = 5_000;
   await shrinkContextIfNeeded(threadId, instrTok + COMP_BUF);
 
   // compute your ideal reserve
-  const ctxTok       = threadTokenTally.get(threadId) || 0;
-  const rawReserve   = Math.ceil((ctxTok + instrTok) * RUN_SAFE_MULT) + COMP_BUF;
-  const MAX_RESERVE  = TOKEN_LIMIT_PER_MIN - 1_000;
+  const ctxTok = threadTokenTally.get(threadId) || 0;
+  const rawReserve = Math.ceil((ctxTok + instrTok) * RUN_SAFE_MULT) + COMP_BUF;
+  const MAX_RESERVE = TOKEN_LIMIT_PER_MIN - 1_000;
 
   // clamp to the model’s per-minute bucket minus what’s already used
-  const used         = tokenHistory.reduce((sum, e) => sum + e.tokens, 0);
+  const used = tokenHistory.reduce((sum, e) => sum + e.tokens, 0);
   const remainingMin = TOKEN_LIMIT_PER_MIN - used - COMP_BUF;
   const finalReserve = Math.min(rawReserve, MAX_RESERVE, Math.max(0, remainingMin));
 
@@ -608,9 +749,9 @@ export async function createRunWithRateLimitRetry(threadId, assistantId, userPro
 
   // account for the reservation in your token history
   tokenHistory.push({
-    ts:     Date.now(),
+    ts: Date.now(),
     tokens: finalReserve,
-    tag:    run.id
+    tag: run.id
   });
 
   return run;
@@ -650,30 +791,6 @@ export async function waitForRunCompletion(threadId, runId) {
   return run;
 }
 
-// Handler to clear queued/in-progress runs for a thread:
-export async function cancelRun(ctx) {
-  const { thread_id } = ctx.params;
-  let convo;
-
-  try {
-    convo = await loadConversation(path.join(SAVED_DIR, `${thread_id}.txt`));
-  } catch {
-    return ctx.json(404, { error: 'Thread not found' });
-  }
-  if (!convo.openaiThreadId) {
-    return ctx.json(404, { error: 'No OpenAI thread mapped' });
-  }
-
-  // mark cancellation
-  requestCancel(convo.openaiThreadId);
-
-  try {
-    return ctx.json(200, { canceled: true });
-  } catch (err) {
-    return ctx.json(500, { error: err.message });
-  }
-}
-
 /**
  * Summarize each tool output in one shot, preserving tool_call_id,
  * submit them as a single payload, then return immediately so the
@@ -685,8 +802,8 @@ async function summarizePerCall(threadId, runId, toolCalls, toolOutputs) {
   // 1) build per-call entries with their own summary_prompt
   const entries = toolCalls.map(tc => {
     const args = JSON.parse(tc.function?.arguments ?? tc.arguments);
-    const id   = tc.id;
-    const out  = toolOutputs.find(o => o.tool_call_id === id)?.output || '';
+    const id = tc.id;
+    const out = toolOutputs.find(o => o.tool_call_id === id)?.output || '';
     return { tool_call_id: id, summary_prompt: args.summary_prompt, output: out };
   });
 
@@ -737,7 +854,7 @@ Do NOT emit any extra text as it will be parsed directly into submitToolOutputs 
       throw new Error('[summarizePerCall] JSON parse error: ' + err.message);
     }
   }
-  
+
 
   // 5) submit those as a single payload
   await waitForRunCompletion(threadId, runId);
@@ -763,26 +880,26 @@ export async function submitToolOutputsSafe(
   // ensure our context is in shape
   await pruneThread(threadId);
 
-  const fullJson   = JSON.stringify(toolOutputs);
+  const fullJson = JSON.stringify(toolOutputs);
   const fullTokens = estimateTokensFromString(fullJson);
   logInfo(`[submitToolOutputsSafe] full payload ≈ ${fullTokens} tokens`);
 
   // if it fits under TPM, send in one go
   if (fullTokens <= TOKEN_LIMIT_PER_MIN - COMP_BUF) {
     logInfo('[submitToolOutputsSafe] payload fits under TPM → sending all at once');
-  
+
     // throttle & send
     await throttleByTokens(fullTokens + COMP_BUF);
     await rateLimit();
     await submitRunToolOutputs(threadId, runId, { tool_outputs: toolOutputs });
     cycleAnswered(runId);
     logSuccess('[submitToolOutputsSafe] full payload sent — now waiting on the run to finish…');
-  
+
     // wait for absolutely everything (including any follow-on runs) to complete
-    await waitForActiveRuns(threadId);
-    return;
+    const { fnLogs, didWriteOp } = await waitForActiveRuns(threadId);
+    return { fnLogs, didWriteOp };
   }
-  
+
 
   // otherwise summarise each call individually
   await summarizePerCall(threadId, runId, toolCalls, toolOutputs);
@@ -792,9 +909,9 @@ export async function submitToolOutputsSafe(
 // ─── Prevent double-submitting the same tool_calls ────────────────
 const answeredToolCallCycle = new Map();          // runId → true
 
-function cycleAnswered(runId)       { answeredToolCallCycle.set(runId, true); }
-function resetCycleFlag(runId)      { answeredToolCallCycle.delete(runId);    }
-function alreadyAnswered(runId)     { return answeredToolCallCycle.has(runId); }
+function cycleAnswered(runId) { answeredToolCallCycle.set(runId, true); }
+function resetCycleFlag(runId) { answeredToolCallCycle.delete(runId); }
+function alreadyAnswered(runId) { return answeredToolCallCycle.has(runId); }
 
 //this doesn't work, openai expects all outputs at once for a set that was called, so we can't chunk outputs
 export async function submitChunksSeparately(threadId, runId, entries) {
@@ -803,7 +920,7 @@ export async function submitChunksSeparately(threadId, runId, entries) {
     await throttleByTokens(estimateTokensFromString(JSON.stringify(entry)) + COMP_BUF);
     await pruneThread(threadId);
     // send exactly one tool_output per call
-    await submitRunToolOutputs(threadId, runId, { tool_outputs: [ entry ] });
+    await submitRunToolOutputs(threadId, runId, { tool_outputs: [entry] });
     await new Promise(r => setTimeout(r, 1000));
     // wait for the model to pick it up before next chunk
     await waitForRunCompletion(threadId, runId);
@@ -835,11 +952,11 @@ export async function safeCreateMessage(threadId, params) {
 
     // wait for enough remaining bucket
     cleanTokenHistory();
-    const used      = tokenHistory.reduce((s,e)=>s+e.tokens,0);
+    const used = tokenHistory.reduce((s, e) => s + e.tokens, 0);
     const remaining = TOKEN_LIMIT_PER_MIN - used;
     if (estimate > remaining) {
       const waitUntil = tokenHistory[0].ts + 60_000;
-      await new Promise(r=>setTimeout(r, Math.max(0, waitUntil-Date.now())));
+      await new Promise(r => setTimeout(r, Math.max(0, waitUntil - Date.now())));
     }
 
     await throttleByTokens(estimate);
@@ -872,9 +989,9 @@ export async function loadConversation(fp) {
       return { messages: data, openaiThreadId: null, title: '' };
     }
     return {
-      messages:       data.messages || [],
+      messages: data.messages || [],
       openaiThreadId: data.openaiThreadId || null,
-      title:          data.title || data.openaiThreadId
+      title: data.title || data.openaiThreadId
     };
   } catch (err) {
     logWarn(`Could not load conversation (${err.message}), starting fresh`);
@@ -884,13 +1001,13 @@ export async function loadConversation(fp) {
 
 export async function saveConversation(fp, convo) {
   logInfo(`Saving conversation to ${fp}`);
-  await fs.mkdir(path.dirname(fp), { recursive:true });
+  await fs.mkdir(path.dirname(fp), { recursive: true });
   await fs.writeFile(fp,
     JSON.stringify({
       openaiThreadId: convo.openaiThreadId,
-      title:          convo.title || convo.openaiThreadId,
-      messages:       convo.messages
-    }, null,2),
+      title: convo.title || convo.openaiThreadId,
+      messages: convo.messages
+    }, null, 2),
     'utf-8'
   );
   logSuccess(`Conversation saved (${convo.messages.length} messages)`);
@@ -940,9 +1057,9 @@ export async function ensureAssistant() {
   const assistantId = asst.id;
   logSuccess(`Created assistant ${assistantId}`);
 
-  await fs.mkdir(path.dirname(ASSISTANT_FILE), { recursive:true });
+  await fs.mkdir(path.dirname(ASSISTANT_FILE), { recursive: true });
   await fs.writeFile(ASSISTANT_FILE,
-    JSON.stringify({ assistantId, instructions:currentInstr }, null,2),
+    JSON.stringify({ assistantId, instructions: currentInstr }, null, 2),
     'utf-8'
   );
   logSuccess(`Assistant file updated`);
@@ -950,126 +1067,12 @@ export async function ensureAssistant() {
 }
 
 
-// ─── Core prompt flow ─────────────────────────────────────────────────
-export async function handlePrompt({ prompt, threadId, title, systemPrompt }, savedDir) {
-  if (!prompt?.trim()) {
-    return { error: true, errorMessage: 'Missing prompt', logs: [] };
-  }
-
-  let allLogs = [];
-  let convo, localId, assistantId;
-
-  // 1) Setup assistant & conversation
-  assistantId = await ensureAssistant();
-  ({ localId, convo } = await initConversation(threadId, title, savedDir));
-
-  // 2) Lock & clear prior runs
-  await lockThread(convo.openaiThreadId);
-  try {
-    checkCancel(convo.openaiThreadId);
-    if (convo.openaiThreadId) {
-      await waitForActiveRuns(convo.openaiThreadId);
-      checkCancel(convo.openaiThreadId);
-    }
-
-    // 3) Try up to 3 times
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        // a) clear stray runs before posting
-        if (convo.openaiThreadId) {
-          await waitForActiveRuns(convo.openaiThreadId);
-          checkCancel(convo.openaiThreadId);
-        }
-
-        // b) throttle for user prompt
-        let userMsg;
-        if (attempt === 1) {
-          userMsg = await safeCreateMessage(convo.openaiThreadId, {
-            role: 'user',
-            content: [{ type: 'text', text: prompt.trim() }]
-          });
-        }
-        checkCancel(convo.openaiThreadId);
-        if (userMsg) convo.messages.push(userMsg);
-
-        // c) run assistant + tools
-        const { fnLogs, selfPrompt } = await runAssistantLoop(
-          convo.openaiThreadId,
-          assistantId,
-          systemPrompt || DEFAULT_SYSTEM_PROMPT
-        );
-        checkCancel(convo.openaiThreadId);
-        allLogs.push(...fnLogs);
-
-        // d) fetch the reply
-      const asst = await fetchAssistantReply(
-        convo.openaiThreadId,
-        runAssistantLoop.lastStatus
-      );
-
-      if (runAssistantLoop.lastStatus !== 'completed') {
-        throw new Error(`Run failed: ${runAssistantLoop.lastStatus}`);
-      }
-
-      convo.messages.push(asst);
-
-        let sp = selfPrompt;
-        while (sp) {
-          const { userMsg, asstMsg, nextSelf } =
-            await handleSelfPrompt(convo.openaiThreadId, assistantId, sp);
-
-          // record the two new messages
-          convo.messages.push(userMsg);
-          convo.messages.push(asstMsg);
-
-          // prepare for the next loop
-          sp = nextSelf;
-        }
-
-        // f) persist
-        await saveConversation(path.join(savedDir, `${localId}.txt`), convo);
-
-        return {
-          userMessageId: userMsg?.id,
-          error: false,
-          logs: allLogs,
-          result: flattenContent(asst.content),
-          threadId: localId,
-          openaiThreadId: convo.openaiThreadId,
-          assistantMessageId: asst.id
-        };
-      } catch (err) {
-        // **Cancellation is final—don’t retry**
-        if (err.message === 'Cancelled by user') {
-          return {
-            error: false,
-            result: '🛑 Operation cancelled.',
-            logs: allLogs,
-            threadId: localId,
-            openaiThreadId: convo.openaiThreadId
-          };
-        }
-
-        // Otherwise record a retry and loop again (up to 3)
-        allLogs.push({ type: 'retry', attempt, error: err.message });
-        if (attempt === 3) {
-          throw err;
-        }
-      }
-    }
-  } catch (err) {
-    return { error: true, errorMessage: err.message, logs: allLogs };
-  } finally {
-    unlockThread(convo.openaiThreadId);
-  }
-}
-
 /**
  * Waits until there are no more runs in queued/in_progress/requires_action.
  */
 export async function waitForActiveRuns(threadId) {
   const fnLogs = [];
-
+  let writeOp = false;
   while (true) {
     checkCancel(threadId);
 
@@ -1081,7 +1084,7 @@ export async function waitForActiveRuns(threadId) {
 
     // If none left, we’re done
     if (liveRuns.length === 0) {
-      return fnLogs;
+      return { fnLogs, writeOp };
     }
 
     // Handle each active run
@@ -1091,9 +1094,9 @@ export async function waitForActiveRuns(threadId) {
       if (run.status === 'requires_action') {
         // a) execute pending tool calls
         const tc = run.required_action.submit_tool_outputs.tool_calls;
-        const { fnLogs: newLogs, follow } = await runToolCalls(tc, threadId);
+        const { fnLogs: newLogs, follow, didWriteOp } = await runToolCalls(tc, threadId);
         fnLogs.push(...newLogs);
-
+        if (didWriteOp) writeOp = didWriteOp;
         // b) collect their outputs
         const outs = follow
           .filter(m => m.role === 'tool')
@@ -1114,11 +1117,46 @@ export async function waitForActiveRuns(threadId) {
     // Brief pause before the next poll
     await new Promise(r => setTimeout(r, 200));
   }
+
+}
+
+
+/**
+ * Cancel all active runs (queued, in_progress, requires_action) on a thread.
+ * @param {string} threadId
+ * @returns {Promise<string[]>} array of run IDs that were requested to cancel
+ */
+export async function cancelActiveRuns(threadId) {
+  const res    = await listThreadRuns(threadId, { limit: 100 });
+  const active = res.data.filter(r =>
+    ['queued', 'in_progress', 'requires_action'].includes(r.status)
+  );
+
+  if (active.length === 0) return [];
+
+  // Request cancellation for each run
+  for (const run of active) {
+    console.log(`⏹ Cancelling run ${run.id}`);
+    await requestCancel(threadId, run.id);
+  }
+
+  // Optionally wait for them to actually finish cancelling
+  for (const run of active) {
+    try {
+      await waitForRunCompletion(threadId, run.id);
+      console.log(`✅ Run ${run.id} cancelled`);
+    } catch {
+      // ignore timeouts/errors here
+    }
+  }
+
+  return active.map(r => r.id);
 }
 
 
 // ─── Main assistant run loop, now using both throttles ─────────────
 export async function runAssistantLoop(threadId, assistantId, instructions) {
+  let writeOp = false;
   // 1) start the run
   const run = await createRunWithRateLimitRetry(threadId, assistantId, instructions, tools);
   const fnLogs = [];
@@ -1134,8 +1172,9 @@ export async function runAssistantLoop(threadId, assistantId, instructions) {
       if (!toolCallsHandled.has(finished.id)) {
         // a) run the tool calls the model asked for
         const tc = finished.required_action.submit_tool_outputs.tool_calls;
-        const { fnLogs: newLogs, follow, selfPrompt: sp } =
+        const { fnLogs: newLogs, follow, selfPrompt: sp, didWriteOp } =
           await runToolCalls(tc, threadId);
+        if (didWriteOp) writeOp = didWriteOp;
         fnLogs.push(...newLogs);
         if (sp) selfPrompt = sp;
 
@@ -1145,8 +1184,9 @@ export async function runAssistantLoop(threadId, assistantId, instructions) {
           .map(t => ({ tool_call_id: t.tool_call_id, output: t.content }));
 
         // c) re-submit them **with** the original tc array
-        await submitToolOutputsSafe(threadId, run.id, tc, outs);
-
+        const result = await submitToolOutputsSafe(threadId, run.id, tc, outs);
+        fnLogs.push(...result.fnLogs);
+        if (result.didWriteOp) writeOp = result.didWriteOp;
         toolCallsHandled.add(finished.id);
       }
 
@@ -1159,7 +1199,7 @@ export async function runAssistantLoop(threadId, assistantId, instructions) {
     break;
   }
 
-  return { fnLogs, selfPrompt };
+  return { fnLogs, selfPrompt, didWriteOp: writeOp };
 }
 
 
@@ -1217,7 +1257,7 @@ export async function handleSelfPrompt(threadId, assistantId, selfPrompt) {
   );
 
   // 1c. Loop through queued → requires_action → tool calls → completed
-  const { fnLogs, selfPrompt: nextSelf } =
+  const { fnLogs, selfPrompt: nextSelf, didWriteOp } =
     await runAssistantLoop(threadId, assistantId, selfPrompt);
 
   // 1d. Once completed, fetch the assistant’s reply
@@ -1227,5 +1267,139 @@ export async function handleSelfPrompt(threadId, assistantId, selfPrompt) {
   );
 
   // 1e. Return both messages *and* any follow-up prompt
-  return { userMsg, asstMsg, nextSelf };
+  return { userMsg, asstMsg, nextSelf, didWriteOp, fnLogs };
+}
+
+
+
+
+// ─── Core prompt flow ─────────────────────────────────────────────────
+export async function handlePrompt({ prompt, threadId, title, systemPrompt }, savedDir) {
+  if (!prompt?.trim()) {
+    return { error: true, errorMessage: 'Missing prompt', logs: [] };
+  }
+
+  let allLogs = [];
+  let convo, localId, assistantId;
+
+  let writeOp = false;
+
+  // 1) Setup assistant & conversation
+  assistantId = await ensureAssistant();
+  ({ localId, convo } = await initConversation(threadId, title, savedDir));
+
+  // 2) Lock & clear prior runs
+  await lockThread(convo.openaiThreadId);
+  try {
+    checkCancel(convo.openaiThreadId);
+    if (convo.openaiThreadId) {
+      const { didWriteOp, fnLogs } = await waitForActiveRuns(convo.openaiThreadId);
+      if (didWriteOp) writeOp = didWriteOp;
+      allLogs.push(...fnLogs);
+      checkCancel(convo.openaiThreadId);
+    }
+
+    // 3) Try up to 3 times
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        // a) clear stray runs before posting
+        if (convo.openaiThreadId) {
+          const { didWriteOp:wWriteOp, fnLogs:wfnLogs } = await waitForActiveRuns(convo.openaiThreadId);
+          if (wWriteOp) writeOp = wWriteOp;
+          allLogs.push(...wfnLogs);
+          checkCancel(convo.openaiThreadId);
+        }
+
+        // b) throttle for user prompt
+        let userMsg;
+        if (attempt === 1) {
+          userMsg = await safeCreateMessage(convo.openaiThreadId, {
+            role: 'user',
+            content: [{ type: 'text', text: prompt.trim() }]
+          });
+        }
+        checkCancel(convo.openaiThreadId);
+        if (userMsg) convo.messages.push(userMsg);
+
+        // c) run assistant + tools
+        const { fnLogs:rfnLogs, selfPrompt, didWriteOp:rWriteOp } = await runAssistantLoop(
+          convo.openaiThreadId,
+          assistantId,
+          systemPrompt || DEFAULT_SYSTEM_PROMPT
+        );
+        if (rWriteOp) writeOp = rWriteOp;
+        checkCancel(convo.openaiThreadId);
+        allLogs.push(...rfnLogs);
+
+        // d) fetch the reply
+        const asst = await fetchAssistantReply(
+          convo.openaiThreadId,
+          runAssistantLoop.lastStatus
+        );
+
+        if (runAssistantLoop.lastStatus !== 'completed') {
+          throw new Error(`Run failed: ${runAssistantLoop.lastStatus}`);
+        }
+
+        convo.messages.push(asst);
+
+        let sp = selfPrompt;
+        while (sp) {
+          const { userMsg, asstMsg, nextSelf, didWriteOp:hWriteOp, fnLogs:sfnLogs } =
+            await handleSelfPrompt(convo.openaiThreadId, assistantId, sp);
+
+          if (hWriteOp) writeOp = hWriteOp;
+          allLogs.push(...sfnLogs);
+          // record the two new messages
+          convo.messages.push(userMsg);
+          convo.messages.push(asstMsg);
+
+          // prepare for the next loop
+          sp = nextSelf;
+        }
+
+        // f) persist
+        await saveConversation(path.join(savedDir, `${localId}.txt`), convo);
+
+        //save the snapshot if edits occurred
+        if (writeOp) {
+          await commitGitSnapshot(savedDir);
+        }
+    
+        return {
+          userMessageId: userMsg?.id,
+          error: false,
+          logs: allLogs,
+          result: flattenContent(asst.content),
+          threadId: localId,
+          openaiThreadId: convo.openaiThreadId,
+          assistantMessageId: asst.id
+        };
+      } catch (err) {
+        // **Cancellation is final—don’t retry**
+        await cancelActiveRuns(convo.openaiThreadId);
+        
+        if (err.message === 'Cancelled by user') {
+          return {
+            error: false,
+            result: '🛑 Operation cancelled.',
+            logs: allLogs,
+            threadId: localId,
+            openaiThreadId: convo.openaiThreadId
+          };
+        }
+
+        // Otherwise record a retry and loop again (up to 3)
+        allLogs.push({ type: 'retry', attempt, error: err.message });
+        if (attempt === 3) {
+          throw err;
+        }
+      }
+    }
+
+  } catch (err) {
+    return { error: true, errorMessage: err.message, logs: allLogs };
+  } finally {
+    unlockThread(convo.openaiThreadId);
+  }
 }

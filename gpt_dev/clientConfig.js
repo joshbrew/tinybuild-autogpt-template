@@ -6,6 +6,7 @@ export const SMART_MODEL = process.env.SMART_MODEL || 'o4-mini'; //these don't h
 export const MODEL_LIMITS = {
   'gpt-4.1':      30000,
   'gpt-4.1-mini': 200000,
+  'o3-mini': 200000, //supports assistants
   'o4-mini': 200000 //assistants/threads api not yet supported
   // add others as needed
 };

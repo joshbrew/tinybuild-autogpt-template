@@ -2,37 +2,26 @@
 
 import path from 'path';
 import fs from 'fs/promises';
-import fsSync from 'fs'
-import http from 'http';
-import https from 'https';
-import { exec } from 'child_process';
 import {
   flattenContent,
-  sseChannel,
-  pendingConsoleHistory, makeFileWalker,
   rateLimit, lockThread, unlockThread, 
   logError, logInfo, logSuccess, logWarn
 } from './serverUtil.js'
 
 import { DEFAULT_SYSTEM_PROMPT } from './openaiSystemPrompt.js'
-import { functionSchemas, tools } from './openaiToolCalls.js';
+import { baseToolHandlers, tools } from './openaiToolCalls.js';
 
 import {
-  ensureLocalRepo, commitGitSnapshot,
-  restoreBranch, restoreFilesFromRef,
-  listBranches, listVersions,
-  createBranch, getChangelog,
-  deleteBranch, mergeBranch,
-  pushBranch, pullBranch
+  commitGitSnapshot,
+  gitToolCalls
 } from './gitHelper.js';
 
 
 import {
-  BASE_MODEL, SUMM_MODEL, SMART_MODEL,
-  MODEL_LIMITS, SUMM_LIMIT,
+  BASE_MODEL, SUMM_MODEL, SMART_MODEL, SUMM_LIMIT,
   TOKEN_LIMIT_PER_MIN, PRUNE_AT, KEEP_N_LIVE,
   RUN_SAFE_MULT, COMP_BUF, HARD_CAP,
-  ASSISTANT_FILE, SAVED_DIR, PRUNED_SUMMARY_TOKENS
+  ASSISTANT_FILE, PRUNED_SUMMARY_TOKENS
 } from './clientConfig.js'
 
 import {
@@ -51,414 +40,84 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 
+
+export const toolHandlers = {
+  // ─── Filesystem Tools ──────────────────────────────────────────────────
+  
+  async smart_chat({ messages, max_completion_tokens }, { }) {
+    const resp = await createChatCompletion({
+      model: SMART_MODEL,
+      messages,
+      max_completion_tokens
+    });
+    const reply = resp.choices?.[0]?.message?.content ?? '';
+    return { result: JSON.stringify({ reply }) };
+  },
+
+  // Base file system etc calls.
+  ...baseToolHandlers,
+  
+  // ─── Git Tools ─────────────────────────────────────────────────────────
+  ...gitToolCalls
+
+};
+
 // ─── Tool‐calling runner, see function schemas in openaiToolCalls.js  ───────────────────────────────────────────────
 export async function runToolCalls(toolCalls, threadId) {
-  let didWriteOp = false;  // flag for any file manipulations
-  const fnLogs = [], follow = [];
+  let didWriteOp = false;
+  const fnLogs = [];
+  const follow = [];
   let selfPrompt = null;
+
+  // Shared context passed into each handler
   const root = process.cwd();
-  const safe = (...p) => path.join(root, ...p);
+  const safe = (...segments) => path.join(root, ...segments);
+  const ctx = { threadId, root, safe };
 
   checkCancel(threadId);
 
   for (const tc of toolCalls) {
     const name = tc.function?.name ?? tc.name;
     const args = JSON.parse(tc.function?.arguments ?? tc.arguments);
-    let result = '';
 
-    logInfo("⚡ Assistant called: " + name);
-    // 1) Log the call immediately
+    // 1) Log invocation
     fnLogs.push({ type: 'function_call', name, arguments: args });
+    console.log(`⚡ Assistant called: ${name}`);
 
-    switch (name) {
-      case 'read_file': {
-        const fp = safe(args.folder, args.filename);
-        let txt, st;
-        try {
-          txt = await fs.readFile(fp, 'utf-8');
-          st = await fs.stat(fp);
-        } catch (err) {
-          if (err.code === 'ENOENT') {
-            // fallback to empty content (or signal error back to ChatGPT)
-            result = JSON.stringify({
-              content: '',
-              byteLength: 0,
-              modifiedTime: null
-            });
-            break;
-          }
-          throw err;
-        }
-        result = JSON.stringify({
-          content: txt,
-          byteLength: st.size,
-          modifiedTime: st.mtime.toISOString()
-        });
-        break;
-      }
-
-      case 'write_file': {
-        didWriteOp = true;
-        const dir = safe(args.folder);
-        await fs.mkdir(dir, { recursive: true });
-        const fp = safe(args.folder, args.filename);
-        let existing = '';
-        try { existing = await fs.readFile(fp, 'utf-8'); } catch { }
-        let out = args.content;
-        if (args.replace_range) {
-          out = existing.slice(0, args.replace_range.start)
-            + args.content
-            + existing.slice(args.replace_range.end);
-        } else if (Number.isInteger(args.insert_at)) {
-          const p = args.insert_at;
-          out = existing.slice(0, p) + args.content + existing.slice(p);
-        }
-        await fs.writeFile(fp, out, 'utf-8');
-        const st2 = await fs.stat(fp);
-        result = JSON.stringify({ byteLength: st2.size });
-        break;
-      }
-
-      case 'copy_file': {
-        didWriteOp = true;
-        const src = safe(args.source);
-        const dst = safe(args.destination);
-        if (!src.startsWith(root + path.sep) || !dst.startsWith(root + path.sep)) {
-          result = `Error: invalid path (outside project root)`;
-          break;
-        }
-        await fs.mkdir(path.dirname(dst), { recursive: true });
-        try {
-          await fs.copyFile(src, dst);
-          result = `Copied ${args.source} → ${args.destination}`;
-        } catch (err) {
-          if (err.code === 'ENOENT') {
-            result = `Error copying "${args.source}": file not found`;
-            break;
-          }
-          throw err;
-        }
-        break;
-      }
-
-      case 'fetch_file': {
-        didWriteOp = true;
-        const url = args.url;
-        const dst = safe(args.destination);
-        // ensure destination directory exists
-        await fs.mkdir(path.dirname(dst), { recursive: true });
-
-        let succeeded = false;
-        try {
-          await new Promise((resolve, reject) => {
-            const client = url.startsWith('https') ? https : http;
-            const req = client.get(url, res => {
-              if (res.statusCode !== 200) {
-                // reject on any non-200
-                return reject(new Error(`HTTP ${res.statusCode}`));
-              }
-              const fileStream = fsSync.createWriteStream(dst);
-              res.pipe(fileStream);
-              fileStream.once('finish', () => fileStream.close(resolve));
-            });
-            req.once('error', err => {
-              // clean up partial file
-              fsSync.unlink(dst, () => { });
-              reject(err);
-            });
-          });
-          succeeded = true;
-        } catch (err) {
-          // gracefully capture the error
-          result = `Error fetching "${url}": ${err.message}`;
-        }
-
-        if (succeeded) {
-          result = `Fetched ${url} → ${args.destination}`;
-        }
-        break;
-      }
-
-      case 'list_directory': {
-        const folder = args.folder || '.';
-        const absPath = safe(folder);
-
-        // guard against “no such directory”
-        let items = [];
-        try {
-          const walker = makeFileWalker({
-            recursive: args.recursive,
-            skip_node_modules: args.skip_node_modules !== false,
-            deep_node_modules: args.deep_node_modules === true,
-          });
-          items = await walker(absPath);
-        } catch (err) {
-          if (err.code === 'ENOENT') {
-            console.warn(`list_directory: directory not found at ${absPath}, returning []`);
-            items = [];
-          } else {
-            throw err;
-          }
-        }
-
-        result = JSON.stringify(items);
-        break;
-      }
-
-      case 'move_file': {
-        didWriteOp = true;
-        const src = safe(args.source);
-        const dst = safe(args.destination);
-        await fs.mkdir(path.dirname(dst), { recursive: true });
-        await fs.rename(src, dst);
-        result = `Moved ${args.source} → ${args.destination}`;
-        break;
-      }
-
-      case 'remove_directory': {
-        didWriteOp = true;
-        await fs.rm(safe(args.folder), {
-          recursive: args.recursive !== false,
-          force: true
-        });
-        result = `Removed directory ${args.folder}`;
-        break;
-      }
-
-      case 'rename_file': {
-        didWriteOp = true;
-        const dir = safe(args.folder);
-        await fs.rename(
-          path.join(dir, args.old_filename),
-          path.join(dir, args.new_filename)
-        );
-        result = `Renamed ${args.old_filename} → ${args.new_filename}`;
-        break;
-      }
-
-      case 'reset_project': {
-        didWriteOp = true;
-        const msg = await resetProject();
-        result = msg;
-        break;
-      }
-
-      case 'run_shell': {
-        console.log("Shell running: ", args.command);
-        if (args.command === 'npm run build') {
-          result = "Illegal command."
-          break;
-        }
-        result = await new Promise(resolve => {
-          exec(args.command, { cwd: root, shell: true }, (err, stdout, stderr) => {
-            resolve(JSON.stringify({
-              stdout: stdout.trim(),
-              stderr: stderr.trim(),
-              code: err ? err.code : 0
-            }));
-          });
-        });
-        break;
-      }
-
-      case 'reprompt_self': {
-        selfPrompt = args.new_prompt;
-        console.log("Prompting self: ", selfPrompt);
-        result = 'Scheduled self-prompt';
-        break;
-      }
-
-      case 'smart_chat': {
-        const {
-          messages,
-          temperature,
-          max_completion_tokens
-        } = args;
-        const resp = await createChatCompletion({
-          model: SMART_MODEL,
-          messages,
-          //temperature,
-          max_completion_tokens
-        });
-        const reply = resp.choices?.[0]?.message?.content ?? '';
-        result = JSON.stringify({ reply });
-        break;
-      }
-
-      case 'get_console_history': {
-        // 1) create a request id and broadcast SSE
-        const id = Math.random() * 1000000000000000;
-        sseChannel.broadcast(JSON.stringify({ type: 'request_console_history', id }), 'console');
-
-        // 2) wait for POST /api/console_history to resolve
-        const history = await new Promise((resolve, reject) => {
-          // keep resolver so the HTTP endpoint can call it
-          pendingConsoleHistory.set(id, resolve);
-          // 15-s timeout to avoid hanging forever
-          setTimeout(() => {
-            pendingConsoleHistory.delete(id);
-            reject(new Error('console history timeout'));
-          }, 10_000);
-        });
-
-        result = JSON.stringify(history);
-        break;
-      }
-
-      // ─── Git snapshot ───────────────────────────────────────────────────────────
-      case 'commit_git_snapshot': {
-        didWriteOp = true;
-        try {
-          await commitGitSnapshot(args.dir);
-          result = JSON.stringify({ message: `Committed snapshot in ${args.dir}` });
-        } catch (err) {
-          result = `Error: ${err.message}`;
-        }
-        break;
-      }
-
-      // ─── Git history & diffs ─────────────────────────────────────────────────────
-      case 'list_versions': {
-        try {
-          const versions = await listVersions(args.dir, args.maxCount);
-          result = JSON.stringify({ versions });
-        } catch (err) {
-          result = `Error: ${err.message}`;
-        }
-        break;
-      }
-
-      case 'get_changelog': {
-        if (!args.ref) {
-          result = 'Error: missing ref';
-          break;
-        }
-        try {
-          const changelog = await getChangelog(args.dir, args.ref);
-          result = JSON.stringify({ changelog });
-        } catch (err) {
-          result = `Error: ${err.message}`;
-        }
-        break;
-      }
-
-      // ─── Git branch management ───────────────────────────────────────────────────
-      case 'list_branches': {
-        try {
-          const branches = await listBranches(args.dir);
-          result = JSON.stringify({ branches });
-        } catch (err) {
-          result = `Error: ${err.message}`;
-        }
-        break;
-      }
-
-      case 'create_branch': {
-        didWriteOp = true;
-        try {
-          await createBranch(args.dir, args.branch, args.remote, args.startPoint);
-          result = JSON.stringify({ message: `Created branch '${args.branch}'` });
-        } catch (err) {
-          result = `Error: ${err.message}`;
-        }
-        break;
-      }
-
-      case 'delete_branch': {
-        didWriteOp = true;
-        try {
-          await deleteBranch(args.dir, args.branch, args.remote, args.force);
-          result = JSON.stringify({ message: `Deleted branch '${args.branch}'${args.remote ? ` on ${args.remote}` : ''}` });
-        } catch (err) {
-          result = `Error: ${err.message}`;
-        }
-        break;
-      }
-
-      case 'restore_branch': {
-        didWriteOp = true;
-        try {
-          await restoreBranch(args.dir, args.branch, args.remote);
-          result = JSON.stringify({ message: `Checked out '${args.branch}'${args.remote ? ` from ${args.remote}` : ''}` });
-        } catch (err) {
-          result = `Error: ${err.message}`;
-        }
-        break;
-      }
-
-      case 'merge_branch': {
-        didWriteOp = true;
-        try {
-          await mergeBranch(
-            args.dir,
-            args.sourceBranch, args.sourceRemote,
-            args.targetBranch, args.targetRemote
-          );
-          result = JSON.stringify({
-            message: `Merged '${args.sourceBranch}'${args.sourceRemote ? ` from ${args.sourceRemote}` : ''} into '${args.targetBranch}'`
-          });
-        } catch (err) {
-          result = `Error: ${err.message}`;
-        }
-        break;
-      }
-
-      // ─── Git push & pull ─────────────────────────────────────────────────────────
-      case 'push_branch': {
-        try {
-          await pushBranch(args.dir, args.branch, args.remote);
-          result = JSON.stringify({ message: `Pushed '${args.branch}' to '${args.remote || 'origin'}'` });
-        } catch (err) {
-          result = `Error: ${err.message}`;
-        }
-        break;
-      }
-
-      case 'pull_branch': {
-        try {
-          await pullBranch(args.dir, args.branch, args.remote);
-          result = JSON.stringify({ message: `Pulled '${args.branch}'${args.remote ? ` from ${args.remote}` : ''}` });
-        } catch (err) {
-          result = `Error: ${err.message}`;
-        }
-        break;
-      }
-
-      // ─── Git file restore ─────────────────────────────────────────────────────────
-      case 'restore_files_from_ref': {
-        didWriteOp = true;
-        if (!args.ref || !args.files) {
-          result = 'Error: missing ref or files';
-          break;
-        }
-        try {
-          await restoreFilesFromRef(args.dir, args.ref, args.files);
-          result = JSON.stringify({ message: `Restored files from '${args.ref}'` });
-        } catch (err) {
-          result = `Error: ${err.message}`;
-        }
-        break;
-      }
-
+    // 2) Dispatch to handler
+    const handler = toolHandlers[name];
+    if (!handler) {
+      throw new Error(`No handler found for tool: ${name}`);
     }
 
-    const replyTokens = estimateTokensFromString(result);
-    await throttleByTokens(replyTokens);           // stay inside TPM
-    addToThreadTally(
-      threadId,
-      [{ type: 'text', text: result }]             // mimics the message body
-    );
+    let out;
+    try {
+      out = await handler(args, ctx);
+    } catch (err) {
+      out = { result: `Error: ${err.message}` };
+    }
 
+    const { result, didWriteOp: wrote, selfPrompt: sp } = out;
+    if (wrote) didWriteOp = true;
+    if (sp) selfPrompt = sp;
+
+    // 3) Log result
     fnLogs.push({ type: 'function_result', name, result });
     follow.push(
       { role: 'assistant', tool_calls: [tc] },
       { role: 'tool', tool_call_id: tc.id, name, content: result }
     );
+
+    // 4) Send back into the thread
+    const replyTokens = estimateTokensFromString(result);
+    await throttleByTokens(replyTokens);
+    addToThreadTally(threadId, [{ type: 'text', text: result }]);
+
+    checkCancel(threadId);
   }
 
   return { fnLogs, follow, selfPrompt, didWriteOp };
 }
-
 
 // Map: OpenAI-thread-ID → running total of message-tokens *as last sent*
 const threadTokenTally = new Map();

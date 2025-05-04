@@ -1,5 +1,17 @@
+import path from 'path';
+import fs from 'fs/promises';
+import fsSync from 'fs'
+import http from 'http';
+import https from 'https';
+import { 
+  makeFileWalker, 
+  sseChannel, 
+  pendingConsoleHistory 
+} from './serverUtil.js';
+
+
 /* ────────── tool schemas ────────── */
-export const functionSchemas = [
+export const baseFunctionSchemas = [
   {
     name: 'read_file',
     description: 'Read a UTF-8 file; returns {content, byteLength, modifiedTime}',
@@ -194,6 +206,10 @@ export const functionSchemas = [
     }
   },
 
+  
+];
+
+export const gitFunctionSchemas = [
   // GIT FUNCTIONALITY (only use when the user explicitly requests Git operations)
   // {
   //   name: 'commit_git_snapshot',
@@ -236,132 +252,314 @@ export const functionSchemas = [
     }
   },
 
-  // --- Git branch management tools ---
   {
-    name: 'list_branches',
-    description: 'Uses the Git CLI (`git branch -a`) to list all local and remote branches. Only invoke when the user explicitly asks to see branch names.',
+    name: 'remove_local_git_repo',
+    description: 'Deletes the local Git repository by removing the `.git` folder. Only invoke when the user explicitly asks to reset the repo.',
     parameters: {
       type: 'object',
       properties: {
-        dir: { type: 'string', description: 'Path to the Git repository directory' },
-        summary_prompt: { type: 'string', description: 'System prompt for summarizing branches list.' }
+        dir:            { type: 'string', description: 'Path to the directory containing the .git folder' },
+        summary_prompt: { type: 'string', description: 'System prompt for summarizing removal result.' }
       },
       required: ['dir', 'summary_prompt']
     }
   },
   {
-    name: 'create_branch',
-    description: 'Uses the Git CLI (`git checkout -b` or `git checkout -b <branch> <remote>/<branch>`) to create a new local branch or track a remote branch. Only invoke when the user explicitly asks to create or switch branches.',
+    name: 'get_current_branch',
+    description: 'Uses the Git CLI (`git rev-parse --abbrev-ref HEAD`) to return the name of the current branch. Only invoke when the user explicitly asks to view the active branch.',
     parameters: {
       type: 'object',
       properties: {
-        dir: { type: 'string', description: 'Path to the Git repo' },
-        branch: { type: 'string', description: 'Name of the branch to create' },
-        remote: { type: 'string', description: 'Optional remote to track (e.g., "origin")' },
-        startPoint: { type: 'string', description: 'Base commit or branch (defaults to HEAD)' },
-        summary_prompt: { type: 'string', description: 'System prompt for summarizing branch creation.' }
+        dir:            { type: 'string', description: 'Path to the Git repository directory' },
+        summary_prompt: { type: 'string', description: 'System prompt for summarizing branch name.' }
       },
-      required: ['dir', 'branch', 'summary_prompt']
+      required: ['dir', 'summary_prompt']
     }
   },
   {
-    name: 'delete_branch',
-    description: 'Uses the Git CLI (`git branch -d` or `-D`, or `git push <remote> --delete`) to delete a branch locally or on a remote. Only invoke when the user explicitly asks to remove a branch.',
+    name: 'list_remotes',
+    description: 'Uses the Git CLI (`git remote -v`) to list all configured remotes and their URLs. Only invoke when the user explicitly asks to view remotes.',
     parameters: {
       type: 'object',
       properties: {
-        dir: { type: 'string', description: 'Path to the Git repo' },
-        branch: { type: 'string', description: 'Name of the branch to delete' },
-        remote: { type: 'string', description: 'Optional remote name (to delete remotely)' },
-        force: { type: 'boolean', description: 'Force delete local branch (true for -D)' },
-        summary_prompt: { type: 'string', description: 'System prompt for summarizing deletion.' }
+        dir:            { type: 'string', description: 'Path to the Git repository directory' },
+        summary_prompt: { type: 'string', description: 'System prompt for summarizing remotes list.' }
       },
-      required: ['dir', 'branch', 'summary_prompt']
+      required: ['dir', 'summary_prompt']
     }
   },
   {
-    name: 'restore_branch',
-    description: 'Uses the Git CLI (`git checkout <branch>` or `git checkout --track <remote>/<branch>`) to checkout or track a branch. Only invoke when the user explicitly asks to switch branches.',
+    name: 'set_remote_url',
+    description: 'Uses the Git CLI (`git remote add` or `git remote set-url`) to add or update a remote. Only invoke when the user explicitly asks to configure a remote.',
     parameters: {
       type: 'object',
       properties: {
-        dir: { type: 'string', description: 'Path to the Git repo' },
-        branch: { type: 'string', description: 'Name of the branch to checkout' },
-        remote: { type: 'string', description: 'Optional remote to track' },
-        summary_prompt: { type: 'string', description: 'System prompt for summarizing checkout.' }
+        dir:            { type: 'string', description: 'Path to the Git repository directory' },
+        name:           { type: 'string', description: 'Name of the remote to add or update (e.g., "origin")' },
+        url:            { type: 'string', description: 'URL of the remote repository' },
+        summary_prompt: { type: 'string', description: 'System prompt for summarizing remote configuration result.' }
       },
-      required: ['dir', 'branch', 'summary_prompt']
+      required: ['dir', 'name', 'url', 'summary_prompt']
     }
   },
   {
-    name: 'merge_branch',
-    description: 'Uses the Git CLI (`git merge <source>` after optionally fetching) to merge one branch into another. Only invoke when the user explicitly asks to merge branches.',
+    name: 'fetch_all',
+    description: 'Uses the Git CLI (`git fetch --all`) to fetch updates from all remotes. Only invoke when the user explicitly asks to fetch.',
     parameters: {
       type: 'object',
       properties: {
-        dir: { type: 'string', description: 'Path to the Git repo' },
-        sourceBranch: { type: 'string', description: 'Name of source branch' },
-        sourceRemote: { type: 'string', description: 'Optional remote for source' },
-        targetBranch: { type: 'string', description: 'Name of target branch' },
-        targetRemote: { type: 'string', description: 'Optional remote for target' },
-        summary_prompt: { type: 'string', description: 'System prompt for summarizing merge result.' }
+        dir:            { type: 'string', description: 'Path to the Git repository directory' },
+        summary_prompt: { type: 'string', description: 'System prompt for summarizing fetch result.' }
       },
-      required: ['dir', 'sourceBranch', 'targetBranch', 'summary_prompt']
-    }
-  },
-
-  // --- Git push/pull tools ---
-  {
-    name: 'push_branch',
-    description: 'Uses the Git CLI (`git push`) to push a branch to its remote (default origin). Only invoke when the user explicitly asks to push changes.',
-    parameters: {
-      type: 'object',
-      properties: {
-        dir: { type: 'string', description: 'Path to the Git repo' },
-        branch: { type: 'string', description: 'Name of the branch to push' },
-        remote: { type: 'string', description: 'Remote name (defaults to origin)' },
-        summary_prompt: { type: 'string', description: 'System prompt for summarizing push result.' }
-      },
-      required: ['dir', 'branch', 'summary_prompt']
+      required: ['dir', 'summary_prompt']
     }
   },
   {
-    name: 'pull_branch',
-    description: 'Uses the Git CLI (`git fetch` and `git merge` or `git pull`) to pull updates for a branch from its remote. Only invoke when the user explicitly asks to pull changes.',
+    name: 'hard_reset',
+    description: 'Uses the Git CLI (`git reset --hard <commit>`) to reset the working tree to the specified commit (default HEAD). Only invoke when the user explicitly asks to reset.',
     parameters: {
       type: 'object',
       properties: {
-        dir: { type: 'string', description: 'Path to the Git repo' },
-        branch: { type: 'string', description: 'Name of the branch to pull' },
-        remote: { type: 'string', description: 'Optional remote name' },
-        summary_prompt: { type: 'string', description: 'System prompt for summarizing pull result.' }
+        dir:            { type: 'string', description: 'Path to the Git repository directory' },
+        commit:         { type: 'string', description: 'Commit SHA or ref to reset to (defaults to HEAD)' },
+        summary_prompt: { type: 'string', description: 'System prompt for summarizing reset result.' }
       },
-      required: ['dir', 'branch', 'summary_prompt']
+      required: ['dir', 'summary_prompt']
     }
   },
-
-  // --- Git file restore tool ---
   {
-    name: 'restore_files_from_ref',
-    description: 'Uses the Git CLI (`git checkout <ref> -- <files>`) to restore specific files from a given ref. Only invoke when the user explicitly asks to revert or restore files.',
+    name: 'stash_all',
+    description: 'Uses the Git CLI (`git stash push` with optional `--include-untracked`) to stash all local changes. Only invoke when the user explicitly asks to stash.',
     parameters: {
       type: 'object',
       properties: {
-        dir: { type: 'string', description: 'Path to the Git repo' },
-        ref: { type: 'string', description: 'Commit SHA or branch name' },
-        files: {
-          anyOf: [
-            { type: 'string' },
-            { type: 'array', items: { type: 'string' } }
-          ],
-          description: 'Path or list of file paths to restore'
-        },
-        summary_prompt: { type: 'string', description: 'System prompt for summarizing restore operation.' }
+        dir:              { type: 'string', description: 'Path to the Git repository directory' },
+        includeUntracked: { type: 'boolean', description: 'Whether to include untracked files in the stash' },
+        summary_prompt:   { type: 'string', description: 'System prompt for summarizing stash result.' }
       },
-      required: ['dir', 'ref', 'files', 'summary_prompt']
+      required: ['dir', 'summary_prompt']
+    }
+  },
+  {
+    name: 'apply_stash',
+    description: 'Uses the Git CLI (`git stash apply`) to apply a stash entry. Only invoke when the user explicitly asks to apply a stash.',
+    parameters: {
+      type: 'object',
+      properties: {
+        dir:            { type: 'string', description: 'Path to the Git repository directory' },
+        stashRef:       { type: 'string', description: 'Stash reference to apply (e.g., "stash@{0}")' },
+        summary_prompt: { type: 'string', description: 'System prompt for summarizing apply-stash result.' }
+      },
+      required: ['dir', 'summary_prompt']
+    }
+  },
+  {
+    name: 'drop_stash',
+    description: 'Uses the Git CLI (`git stash drop`) to drop a stash entry. Only invoke when the user explicitly asks to drop a stash.',
+    parameters: {
+      type: 'object',
+      properties: {
+        dir:            { type: 'string', description: 'Path to the Git repository directory' },
+        stashRef:       { type: 'string', description: 'Stash reference to drop (e.g., "stash@{0}")' },
+        summary_prompt: { type: 'string', description: 'System prompt for summarizing drop-stash result.' }
+      },
+      required: ['dir', 'summary_prompt']
+    }
+  },
+  {
+    name: 'clean_working_directory',
+    description: 'Uses the Git CLI (`git clean -f -d`) to remove untracked files and directories. Only invoke when the user explicitly asks to clean.',
+    parameters: {
+      type: 'object',
+      properties: {
+        dir:            { type: 'string', description: 'Path to the Git repository directory' },
+        force:          { type: 'boolean', description: 'Whether to force deletion of untracked files' },
+        dirs:           { type: 'boolean', description: 'Whether to remove untracked directories' },
+        summary_prompt: { type: 'string', description: 'System prompt for summarizing clean result.' }
+      },
+      required: ['dir', 'summary_prompt']
     }
   }
 
 ];
 
-export const tools = functionSchemas.map(fn => ({ type: 'function', function: fn }));
+export const tools = [
+  ...baseFunctionSchemas,
+  ...gitFunctionSchemas
+
+].map(fn => ({ type: 'function', function: fn }));
+
+
+
+export const baseToolHandlers = {
+  
+    async read_file({ folder, filename }, { safe }) {
+      const fp = safe(folder, filename);
+      try {
+        const txt = await fs.readFile(fp, 'utf-8');
+        const st  = await fs.stat(fp);
+        return {
+          result: JSON.stringify({
+            content: txt,
+            byteLength: st.size,
+            modifiedTime: st.mtime.toISOString()
+          })
+        };
+      } catch (err) {
+        if (err.code === 'ENOENT') {
+          return { result: JSON.stringify({ content: '', byteLength: 0, modifiedTime: null }) };
+        }
+        throw err;
+      }
+    },
+  
+    async write_file({ folder, filename, content, replace_range, insert_at }, { safe }) {
+      const dir = safe(folder);
+      await fs.mkdir(dir, { recursive: true });
+      const fp = safe(folder, filename);
+  
+      let existing = '';
+      try { existing = await fs.readFile(fp, 'utf-8'); } catch {}
+  
+      let out = content;
+      if (replace_range) {
+        out = existing.slice(0, replace_range.start)
+            + content
+            + existing.slice(replace_range.end);
+      } else if (Number.isInteger(insert_at)) {
+        out = existing.slice(0, insert_at) + content + existing.slice(insert_at);
+      }
+  
+      await fs.writeFile(fp, out, 'utf-8');
+      const st2 = await fs.stat(fp);
+  
+      return {
+        result: JSON.stringify({ byteLength: st2.size }),
+        didWriteOp: true
+      };
+    },
+  
+    async copy_file({ source, destination }, { safe, root }) {
+      const src = safe(source);
+      const dst = safe(destination);
+      if (!src.startsWith(root) || !dst.startsWith(root)) {
+        return { result: `Error: invalid path (outside project root)` };
+      }
+      await fs.mkdir(path.dirname(dst), { recursive: true });
+      try {
+        await fs.copyFile(src, dst);
+        return { result: `Copied ${source} → ${destination}`, didWriteOp: true };
+      } catch (err) {
+        if (err.code === 'ENOENT') {
+          return { result: `Error copying "${source}": file not found` };
+        }
+        throw err;
+      }
+    },
+  
+    async fetch_file({ url, destination }, { safe }) {
+      const dst = safe(destination);
+      await fs.mkdir(path.dirname(dst), { recursive: true });
+  
+      let succeeded = false;
+      try {
+        await new Promise((resolve, reject) => {
+          const client = url.startsWith('https') ? https : http;
+          const req = client.get(url, res => {
+            if (res.statusCode !== 200) {
+              return reject(new Error(`HTTP ${res.statusCode}`));
+            }
+            const stream = fsSync.createWriteStream(dst);
+            res.pipe(stream);
+            stream.once('finish', () => stream.close(resolve));
+          });
+          req.once('error', err => {
+            fsSync.unlink(dst, () => {});
+            reject(err);
+          });
+        });
+        succeeded = true;
+      } catch (err) {
+        return { result: `Error fetching "${url}": ${err.message}` };
+      }
+  
+      if (succeeded) {
+        return { result: `Fetched ${url} → ${destination}`, didWriteOp: true };
+      }
+    },
+  
+    async list_directory({ folder='.', recursive, skip_node_modules, deep_node_modules }, { safe }) {
+      const absPath = safe(folder);
+      let items = [];
+      try {
+        const walker = makeFileWalker({
+          recursive,
+          skip_node_modules: skip_node_modules !== false,
+          deep_node_modules: deep_node_modules === true
+        });
+        items = await walker(absPath);
+      } catch (err) {
+        if (err.code === 'ENOENT') {
+          items = [];
+        } else {
+          throw err;
+        }
+      }
+      return { result: JSON.stringify(items) };
+    },
+  
+    async move_file({ source, destination }, { safe }) {
+      const src = safe(source);
+      const dst = safe(destination);
+      await fs.mkdir(path.dirname(dst), { recursive: true });
+      await fs.rename(src, dst);
+      return { result: `Moved ${source} → ${destination}`, didWriteOp: true };
+    },
+  
+    async remove_directory({ folder, recursive }, { safe }) {
+      await fs.rm(safe(folder), { recursive: recursive !== false, force: true });
+      return { result: `Removed directory ${folder}`, didWriteOp: true };
+    },
+  
+    async rename_file({ folder, old_filename, new_filename }, { safe }) {
+      const dir = safe(folder);
+      await fs.rename(path.join(dir, old_filename), path.join(dir, new_filename));
+      return { result: `Renamed ${old_filename} → ${new_filename}`, didWriteOp: true };
+    },
+  
+    async reset_project(_, { root }) {
+      const msg = await resetProject();
+      return { result: msg, didWriteOp: true };
+    },
+  
+    async run_shell({ command }, { root }) {
+      if (command === 'npm run build') {
+        return { result: 'Illegal command.' };
+      }
+      const { stdout, stderr, code } = await new Promise(resolve =>
+        require('child_process').exec(command, { cwd: root, shell: true }, (err, so, se) =>
+          resolve({ stdout: so.trim(), stderr: se.trim(), code: err?.code ?? 0 })
+        )
+      );
+      return { result: JSON.stringify({ stdout, stderr, code }), didWriteOp: false };
+    },
+  
+    async reprompt_self({ new_prompt }) {
+      return { selfPrompt: new_prompt, result: 'Scheduled self-prompt' };
+    },
+  
+    async get_console_history(_, { }) {
+      const id = Math.random() * 1e15;
+      // assume sseChannel and pendingConsoleHistory are in scope
+      sseChannel.broadcast(JSON.stringify({ type: 'request_console_history', id }), 'console');
+      const history = await new Promise((resolve, reject) => {
+        pendingConsoleHistory.set(id, resolve);
+        setTimeout(() => {
+          pendingConsoleHistory.delete(id);
+          reject(new Error('console history timeout'));
+        }, 15000);
+      });
+      return { result: JSON.stringify(history) };
+    },
+  
+}

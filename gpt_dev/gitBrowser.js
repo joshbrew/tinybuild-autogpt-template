@@ -189,10 +189,10 @@ class GitDesktop extends HTMLElement {
         await this._api('/api/git/branches/restore', 'POST', { branch: target });
         this.currentBranch = target;
         this.currentBranchLabel.textContent = target;
-        this.toast(`Checked out ${target}`);
+        this.showToast(`Checked out ${target}`);
       } catch (err) {
         console.error('Branch checkout failed:', err);
-        this.toast(`Error switching to ${target}: ${err.message}`, true);
+        this.showToast(`Error switching to ${target}: ${err.message}`, true);
       } finally {
         this.loadStatus();
       }

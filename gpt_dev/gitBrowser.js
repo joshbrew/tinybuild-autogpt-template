@@ -184,13 +184,19 @@ class GitDesktop extends HTMLElement {
     }
 
     async checkoutBranch() {
-        const target = this.branchSelector.value;
+      const target = this.branchSelector.value;
+      try {
         await this._api('/api/git/branches/restore', 'POST', { branch: target });
         this.currentBranch = target;
         this.currentBranchLabel.textContent = target;
-        this.showToast(`Checked out ${target}`);
+        this.toast(`Checked out ${target}`);
+      } catch (err) {
+        console.error('Branch checkout failed:', err);
+        this.toast(`Error switching to ${target}: ${err.message}`, true);
+      } finally {
         this.loadStatus();
       }
+    }
 
     async newBranch() {
         const name = prompt('New branch name:');

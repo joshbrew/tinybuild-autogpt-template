@@ -228,53 +228,41 @@ export async function deleteBranch(dir, branch, remote, force = false) {
  * @param {string} branch  Branch name
  * @param {string} remote? Remote name, e.g. 'origin'
  */
-
 export async function restoreBranch(dir, branch, remote) {
     await ensureLocalRepo(dir);
   
-    // 1) remove stale lock if present
-    const lock = path.join(dir, '.git', 'index.lock');
-    try { 
-      await fs.promises.unlink(lock);
-    } catch {
-      // nothing to remove
-    }
+    // 1) nuke any stale lock
+    const lockPath = path.join(dir, '.git', 'index.lock');
+    await fs.promises.rm(lockPath, { force: true });
   
-    // 2) stash uncommitted changes & untracked files (ignore failures)
+    // 2) stash everything (ignore failure)
     try {
-      await execP(
-        'git stash push --include-untracked -m "auto-stash before checkout"',
-        { cwd: dir }
-      );
-    } catch {
-      // e.g. “No local changes to save” or other errors → ignore
-    }
+      await execP('git stash push --include-untracked -m "auto-stash before checkout"', { cwd: dir });
+    } catch {}
   
-    // 3) perform the checkout
-    if (remote) {
-      await execP(`git fetch ${remote}`, { cwd: dir });
-      await execP(`git checkout --track ${remote}/${branch}`, { cwd: dir });
-    } else {
-      let exists = true;
-      try {
-        await execP(`git rev-parse --verify ${branch}`, { cwd: dir });
-      } catch {
-        exists = false;
-      }
-      if (exists) {
-        await execP(`git checkout ${branch}`, { cwd: dir });
+    // 3) checkout (with fallback to force)
+    try {
+      if (remote) {
+        await execP(`git fetch ${remote}`, { cwd: dir });
+        await execP(`git checkout --track ${remote}/${branch}`, { cwd: dir });
       } else {
-        await execP(`git checkout -b ${branch}`, { cwd: dir });
+        await execP(`git rev-parse --verify ${branch}`, { cwd: dir }); // branch exists?
+        await execP(`git checkout ${branch}`, { cwd: dir });
       }
+    } catch (err) {
+      // if normal checkout fails, try a forced one
+      console.warn(`normal checkout failed: ${err.message}, attempting forced checkout`);
+      await execP(`git checkout -f ${branch}`, { cwd: dir });
     }
   
-    // 4) reapply stash (ignore conflicts or “nothing to apply”)
+    // 4) reapply stash (ignore errors)
     try {
       await execP('git stash apply', { cwd: dir });
-    } catch {
-      // safe to ignore
-    }
+    } catch {}
+  
+    // success! no exception → HTTP 200
   }
+  
   
 /**
  * Merge one branch into another (supports remote sources).

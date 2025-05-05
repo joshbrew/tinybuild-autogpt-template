@@ -120,7 +120,12 @@ class GitDesktop extends HTMLElement {
             });
           });
         }
-      
+        // grab the toast element (rename from `this.toast`)
+        this.toastEl = this.querySelector('.gd-toast');
+
+        // branch dropdown change
+        this.branchSelector.addEventListener('change', () => this.checkoutBranch());
+
         // Initial data load
         this.loadBranches().then(() => {
           this.loadStatus();
@@ -141,41 +146,32 @@ class GitDesktop extends HTMLElement {
     }
 
     async loadVersions() {
-        const { versions } = await this._api(
-            '/api/git/versions',
-            'POST',
-            { maxCount: 50 }
-        );
-        // populate dropdown
-        this.versionSelector.innerHTML = versions
-            .map(v => {
-                const sha = v.split(' ')[0];
-                return `<option value="${sha}">${v}</option>`;
-            })
-            .join('');
-        this.versionSelector.disabled = false;
-
-        // ─── NEW ─── Auto-select the first (most recent) and load its diff ─────────
+        // fetch the "<sha> <message>" lines
+        const { versions } = await this._api('/api/git/versions', 'POST', { maxCount: 50 });
+      
+        // build options whose value is only the SHA
+        this.versionSelector.innerHTML = versions.map(entry => {
+          const [sha, ...rest] = entry.split(' ');
+          return `<option value="${sha}">${entry}</option>`;
+        }).join('');
+      
+        // if there’s at least one, immediately load its diff
         if (versions.length) {
-            const firstSha = versions[0].split(' ')[0];
-            this.versionSelector.value = firstSha;
-            // ensure panel is open
-            this.diffPanel.classList.remove('collapsed');
-            // load the diff
-            this.loadDiff(firstSha);
+          const firstSha = versions[0].split(' ')[0];
+          this.versionSelector.value = firstSha;
+          this.loadDiff(firstSha);
         }
-    }
-
-
-    async loadDiff(ref) {
-        const { changelog } = await this._api(
-            '/api/git/changelog',
-            'POST',
-            { ref }
-        );
-        this.diffContent.textContent = changelog;
-    }
-
+      }
+      
+      async loadDiff(ref) {
+        try {
+          const { changelog } = await this._api('/api/git/changelog','POST',{ ref });
+          this.diffContent.textContent = changelog;
+        } catch (err) {
+          console.error(err);
+          this.showToast(`Error loading diff: ${err.message}`, true);
+        }
+      }
 
     // ─── BRANCHES ─────────────────────────────────────────────────────────
     async loadBranches() {
@@ -192,16 +188,16 @@ class GitDesktop extends HTMLElement {
         await this._api('/api/git/branches/restore', 'POST', { branch: target });
         this.currentBranch = target;
         this.currentBranchLabel.textContent = target;
-        this.toast(`Checked out ${target}`);
+        this.showToast(`Checked out ${target}`);
         this.loadStatus();
-    }
+      }
 
     async newBranch() {
         const name = prompt('New branch name:');
         if (!name) return;
         await this._api('/api/git/branches', 'POST', { branch: name });
         await this.loadBranches();
-        this.toast(`Branch ${name} created`);
+        this.showToast(`Branch ${name} created`);
     }
 
     async deleteBranch() {
@@ -209,11 +205,12 @@ class GitDesktop extends HTMLElement {
         await this._api('/api/git/branches/delete', 'POST', { branch: this.currentBranch });
         this.currentBranch = '';
         this.commitBtn.disabled = true;
-        this.toast('Branch deleted');
+        this.showToast('Branch deleted');
         await this.loadBranches();
         this.loadStatus();
     }
 
+    
     // ─── STATUS & STAGING ─────────────────────────────────────────────────
     async loadStatus() {
         // status route returns { unstaged:[], staged:[] }
@@ -247,46 +244,46 @@ class GitDesktop extends HTMLElement {
         if (!msg) return;
         await this._api('/api/git/commit', 'POST', { message: msg });
         this.commitMsg.value = '';
-        this.toast(`Committed to ${this.currentBranch}`);
+        this.showToast(`Committed to ${this.currentBranch}`);
         this.loadStatus();
     }
 
     // ─── OTHER OPERATIONS ─────────────────────────────────────────────────
     async fetchAll() {
         await this._api('/api/git/fetch-all', 'POST');
-        this.toast('Fetched all remotes');
+        this.showToast('Fetched all remotes');
     }
 
     async pull() {
         await this._api('/api/git/branches/pull', 'POST', { branch: this.currentBranch });
-        this.toast('Pulled latest');
+        this.showToast('Pulled latest');
         this.loadStatus();
     }
 
     async push() {
         await this._api('/api/git/branches/push', 'POST', { branch: this.currentBranch });
-        this.toast('Pushed to remote');
+        this.showToast('Pushed to remote');
     }
 
     async hardReset() {
         const ref = prompt('Reset to commit (SHA or ref):', 'HEAD');
         if (ref === null) return;
         await this._api('/api/git/hard-reset', 'POST', { commit: ref });
-        this.toast(`Hard reset to ${ref}`);
+        this.showToast(`Hard reset to ${ref}`);
         this.loadStatus();
     }
 
     async removeRepo() {
         if (!confirm('Remove .git and start fresh?')) return;
         await this._api('/api/git/remove-local-repo', 'POST');
-        this.toast('Local Git repo removed');
+        this.showToast('Local Git repo removed');
         this.loadBranches();
         this.loadStatus();
     }
 
     async stash() {
         const { message } = await this._api('/api/git/stash', 'POST');
-        this.toast(message);
+        this.showToast(message);
         this.loadStatus();
     }
 
@@ -294,7 +291,7 @@ class GitDesktop extends HTMLElement {
         const ref = prompt('Stash ref to apply:', 'stash@{0}');
         if (ref === null) return;
         const { message } = await this._api('/api/git/apply-stash', 'POST', { stashRef: ref });
-        this.toast(message);
+        this.showToast(message);
         this.loadStatus();
     }
 
@@ -302,13 +299,13 @@ class GitDesktop extends HTMLElement {
         const ref = prompt('Stash ref to drop:', 'stash@{0}');
         if (ref === null) return;
         const { message } = await this._api('/api/git/drop-stash', 'POST', { stashRef: ref });
-        this.toast(message);
+        this.showToast(message);
     }
 
     async clean() {
         if (!confirm('Clean untracked files and dirs?')) return;
         await this._api('/api/git/clean', 'POST');
-        this.toast('Working directory cleaned');
+        this.showToast('Working directory cleaned');
         this.loadStatus();
     }
 
@@ -317,12 +314,12 @@ class GitDesktop extends HTMLElement {
         return this[op.replace(/-([a-z])/g, (_, c) => c.toUpperCase())]();
     }
 
-    toast(msg, error = false) {
-        this.toast.textContent = msg;
-        this.toast.classList.toggle('error', error);
-        this.toast.hidden = false;
-        setTimeout(() => this.toast.hidden = true, 3000);
-    }
+    showToast(msg, isError = false) {
+        this.toastEl.textContent = msg;
+        this.toastEl.classList.toggle('error', isError);
+        this.toastEl.hidden = false;
+        setTimeout(() => { this.toastEl.hidden = true; }, 3000);
+      }
 }
 
 customElements.define('git-desktop', GitDesktop);

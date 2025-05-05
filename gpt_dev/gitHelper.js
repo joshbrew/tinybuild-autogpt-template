@@ -159,11 +159,22 @@ export async function listVersions(dir, maxCount) {
  * @param {string} ref - Commit SHA, branch name, or range.
  * @returns {Promise<string>} Full diff text.
  */
+
+const DEFAULT_MAX_BUFFER = 10 * 1024 * 1024; // 10 MB
 export async function getChangelog(dir, ref) {
-    // assume repo exists
-    const { stdout } = await execP(`git log -p ${ref}`, { cwd: dir });
-    return stdout;
-}
+    try {
+      // bump the buffer
+      const { stdout } = await execP(
+        `git log -p ${ref}`,
+        { cwd: dir, maxBuffer: DEFAULT_MAX_BUFFER }
+      );
+      return stdout;
+    } catch (err) {
+      console.error('getChangelog failed:', err);
+      throw new Error(`Could not get diff for “${ref}”: ${err.stderr || err.message}`);
+    }
+  }
+  
 
 /**
  * List all local and remote branches.
@@ -210,22 +221,42 @@ export async function deleteBranch(dir, branch, remote, force = false) {
     }
 }
 
-/**
- * Checkout a branch locally or create tracking branch for remote.
- * Failsafe: init repo if no remote.
- * @param {string} dir - Repo directory.
- * @param {string} branch - Branch name to checkout.
- * @param {string} [remote] - Remote name (if tracking).
- */
-export async function restoreBranch(dir, branch, remote) {
-    if (!remote) {
-        await ensureLocalRepo(dir);
-        await execP(`git checkout ${branch}`, { cwd: dir });
-    } else {
-        await execP(`git checkout --track ${remote}/${branch}`, { cwd: dir });
-    }
-}
 
+/**
+ * Checkout or create a branch.
+ * @param {string} dir     Git repo root
+ * @param {string} branch  Branch name
+ * @param {string} remote? Remote name, e.g. 'origin'
+ */
+
+export async function restoreBranch(dir, branch, remote) {
+    await ensureLocalRepo(dir);
+  
+    if (remote) {
+      // fetch + track remote branch
+      await execP(`git fetch ${remote}`, { cwd: dir });
+      await execP(`git checkout --track ${remote}/${branch}`, { cwd: dir });
+    } else {
+      // 1) check if branch exists locally
+      let exists = false;
+      try {
+        // this will succeed if `<branch>` is a local ref
+        await execP(`git rev-parse --verify ${branch}`, { cwd: dir });
+        exists = true;
+      } catch {
+        exists = false;
+      }
+  
+      if (exists) {
+        // 2a) switch to it
+        await execP(`git checkout ${branch}`, { cwd: dir });
+      } else {
+        // 2b) create & switch
+        await execP(`git checkout -b ${branch}`, { cwd: dir });
+      }
+    }
+  }
+  
 /**
  * Merge one branch into another (supports remote sources).
  * Failsafe: init repo for local merges.
@@ -440,7 +471,8 @@ function makeRoute(serviceFn, { required = [], method = 'POST', successCode = 20
             const payload = await serviceFn(data);
             return ctx.json(successCode, payload);
         } catch (err) {
-            return ctx.json(500, { error: err.message });
+            console.error('git service failure:', err.stderr || err.message);
+            return ctx.json(500, { error: err.stderr?.trim() || err.message });
         }
     };
 }

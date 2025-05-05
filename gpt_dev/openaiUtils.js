@@ -339,6 +339,7 @@ export async function initConversation(threadId, title, savedDir) {
 
   /* 4. prune immediately if the history is already heavy */
   if (convo.openaiThreadId) {
+    await cancelActiveRuns(convo.openaiThreadId);
     await pruneThread(convo.openaiThreadId);   // rate-limited inside
   }
 
@@ -1022,7 +1023,7 @@ export async function handlePrompt({ prompt, threadId, title, systemPrompt }, sa
 
         //save the snapshot if edits occurred
         if (writeOp) {
-          await commitGitSnapshot(savedDir);
+          await commitGitSnapshot(savedDir, [ path.join(process.cwd(),'../../') ]);
         }
     
         return {

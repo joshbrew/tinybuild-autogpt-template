@@ -1,7 +1,7 @@
 /* ───────────── Choose network transport ───────────── */
+export const API_BASE = 'http://localhost:3000';
 const USE_WS   = false;                     // ← flip to false to use plain fetch
 export const WS_URL   = 'ws://localhost:3000/ws';
-export const API_BASE = 'http://localhost:3000';
 
 /* ───────────── WebSocket plumbing (only used if USE_WS) ───────────── */
 let ws, wsReady, nextReqId = 1;

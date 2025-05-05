@@ -1,3 +1,5 @@
+//./gpt_dev/gitHelper.js
+
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs';
@@ -35,33 +37,36 @@ export async function removeLocalGitRepo(dir) {
 }
 
 /**
- * Commit all current changes with a timestamped message.
+ * Commit all current changes in `paths` (or everything if empty) with a timestamped message.
  * If a remote is configured, also push to it.
- * @param {string} dir - Path to the Git repository.
+ *
+ * @param {string} dir      - Path to the Git repository.
+ * @param {string[]} [paths] - Relative paths (files or folders) to stage & commit.
  */
-export async function commitGitSnapshot(dir) {
+export async function commitGitSnapshot(dir, paths = []) {
     try {
         // 1) Make sure .git exists
         await ensureLocalRepo(dir);
 
-        // 2) Check for any changes (staged or not)
+        // 2) Check for any changes
         const { stdout: status } = await execP('git status --porcelain', { cwd: dir });
-
         if (!status.trim()) {
             console.log('⚡ No changes detected in', dir, '– skipping commit.');
             return;
         }
 
-        // 3) Stage everything and commit
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        await execP('git add .', { cwd: dir });
-        await execP(`git commit -m "🤖 AI run @ ${timestamp}"`, { cwd: dir });
+        // 3) Stage only the specified paths (or all if none given)
+        const toAdd = paths.length ? paths.join(' ') : '.';
+        await execP(`git add ${toAdd}`, { cwd: dir });
 
-        console.log(`⚡ Latest edits backed up in local git.`);
-        // 4) If a remote exists, push
+        // 4) Commit
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        await execP(`git commit -m "🤖 AI run @ ${timestamp}"`, { cwd: dir });
+        console.log(`⚡ Backed up ${paths.length ? toAdd : 'all changes'} in local git.`);
+
+        // 5) Push if remote exists
         const { stdout: remotes } = await execP('git remote', { cwd: dir });
         if (remotes.trim()) {
-            // find current branch
             const { stdout: branch } = await execP(
                 'git rev-parse --abbrev-ref HEAD',
                 { cwd: dir }
@@ -71,11 +76,11 @@ export async function commitGitSnapshot(dir) {
             console.log(`⚡ Pushed snapshot to origin/${branchName}`);
         }
 
-
     } catch (err) {
         console.warn('⚠️ Git snapshot failed:', err);
     }
 }
+
 
 
 /**
@@ -359,14 +364,21 @@ export async function cleanWorkingDirectory(dir, force = true, dirs = true) {
  */
 function makeRoute(serviceFn, { required = [], method = 'POST', successCode = 200 } = {}) {
     const isGet = method.toUpperCase() === 'GET';
+
     return async function route(ctx) {
-        const data = isGet ? ctx.request.query : ctx.request.body;
-        // validate
+        // fall back in case ctx.request is missing
+        const query = ctx.request?.query ?? ctx.query ?? {};
+        const body = ctx.request?.body ?? ctx.body ?? {};
+
+        const data = isGet ? query : body;
+
+        // validate required keys
         for (const key of required) {
             if (data[key] == null) {
                 return ctx.json(400, { error: `Missing ${key}` });
             }
         }
+
         try {
             const payload = await serviceFn(data);
             return ctx.json(successCode, payload);
@@ -374,6 +386,30 @@ function makeRoute(serviceFn, { required = [], method = 'POST', successCode = 20
             return ctx.json(500, { error: err.message });
         }
     };
+}
+
+
+// helper to parse `git status --porcelain`
+export async function getStatus(dir) {
+    // ensure repo is initialized
+    await ensureLocalRepo(dir);
+
+    const { stdout } = await execP('git status --porcelain', { cwd: dir });
+    const lines = stdout.split('\n').filter(Boolean);
+
+    const staged = [];
+    const unstaged = [];
+
+    for (const line of lines) {
+        // first char = staged change, second = unstaged change
+        const [stagedFlag, unstagedFlag] = [line[0], line[1]];
+        const file = line.slice(3);
+
+        if (stagedFlag !== ' ') staged.push(file);
+        if (unstagedFlag !== ' ') unstaged.push(file);
+    }
+
+    return { staged, unstaged };
 }
 
 // ─── Service adapters ─────────────────────────────────────────────────────────
@@ -404,6 +440,13 @@ const gitServices = {
     restoreFiles: ({ ref, files }) =>
         restoreFilesFromRef(SAVED_DIR, ref, files)
             .then(() => ({ message: `Files restored from '${ref}'` })),
+    commitPaths: ({ paths }) => {
+        if (!Array.isArray(paths) || !paths.length) {
+            throw new Error('Missing paths array');
+        }
+        return commitGitSnapshot(SAVED_DIR, paths)
+            .then(() => ({ message: `Committed: ${paths.join(', ')}` }));
+    },
     removeLocal: () => removeLocalGitRepo(SAVED_DIR).then(() => ({ message: 'Local Git repo removed.' })),
     currentBranch: () => getCurrentBranch(SAVED_DIR).then(branch => ({ branch })),
     listRemotes: () => listRemotes(SAVED_DIR).then(remotes => ({ remotes })),
@@ -422,6 +465,7 @@ const gitServices = {
     cleanWorkdir: ({ force, dirs }) =>
         cleanWorkingDirectory(SAVED_DIR, force, dirs)
             .then(() => ({ message: 'Cleaned working directory.' })),
+    status: () => getStatus(SAVED_DIR).then(({ staged, unstaged }) => ({ staged, unstaged })),
 };
 
 // ─── Generate handlers ─────────────────────────────────────────────────────────
@@ -445,6 +489,15 @@ export const stashRoute = makeRoute(gitServices.stashAll, { required: [], method
 export const applyStashRoute = makeRoute(gitServices.applyStash, { required: [], method: 'POST' });
 export const dropStashRoute = makeRoute(gitServices.dropStash, { required: [], method: 'POST' });
 export const cleanWorkingDirectoryRoute = makeRoute(gitServices.cleanWorkdir, { required: [], method: 'POST' });
+export const statusRoute = makeRoute(gitServices.status, {
+    required: [],      // no params needed
+    method: 'GET',
+    successCode: 200
+});
+export const commitPathsRoute = makeRoute(
+    gitServices.commitPaths,
+    { required: ['paths'], method: 'POST', successCode: 200 }
+);
 
 
 /**
@@ -469,129 +522,131 @@ export const routesConfig = {
     '/api/git/apply-stash': { POST: applyStashRoute },
     '/api/git/drop-stash': { POST: dropStashRoute },
     '/api/git/clean': { POST: cleanWorkingDirectoryRoute },
+    '/api/git/commit-paths': { POST: commitPathsRoute },
+    '/api/git/status': { GET: statusRoute }
 };
 
 
 export const gitToolCalls = {
-    
-      async commit_git_snapshot({ dir }) {
+
+    async commit_git_snapshot({ dir }) {
         await commitGitSnapshot(dir);
         return { result: JSON.stringify({ message: `Committed snapshot in ${dir}` }), didWriteOp: true };
-      },
-    
-      async list_versions({ dir, maxCount }) {
+    },
+
+    async list_versions({ dir, maxCount }) {
         const versions = await listVersions(dir, maxCount);
         return { result: JSON.stringify({ versions }) };
-      },
-    
-      async get_changelog({ dir, ref }) {
+    },
+
+    async get_changelog({ dir, ref }) {
         if (!ref) throw new Error('Missing ref');
         const changelog = await getChangelog(dir, ref);
         return { result: JSON.stringify({ changelog }) };
-      },
-    
-      async list_branches({ dir }) {
+    },
+
+    async list_branches({ dir }) {
         const branches = await listBranches(dir);
         return { result: JSON.stringify({ branches }) };
-      },
-    
-      async create_branch({ dir, branch, remote, startPoint }) {
+    },
+
+    async create_branch({ dir, branch, remote, startPoint }) {
         await createBranch(dir, branch, remote, startPoint);
         return {
-          result: JSON.stringify({ message: `Branch '${branch}' created${remote ? ` from ${remote}` : ''}` }),
-          didWriteOp: true
+            result: JSON.stringify({ message: `Branch '${branch}' created${remote ? ` from ${remote}` : ''}` }),
+            didWriteOp: true
         };
-      },
-    
-      async delete_branch({ dir, branch, remote, force }) {
+    },
+
+    async delete_branch({ dir, branch, remote, force }) {
         await deleteBranch(dir, branch, remote, force);
         return {
-          result: JSON.stringify({ message: `Branch '${branch}' deleted${remote ? ` from ${remote}` : ''}` }),
-          didWriteOp: true
+            result: JSON.stringify({ message: `Branch '${branch}' deleted${remote ? ` from ${remote}` : ''}` }),
+            didWriteOp: true
         };
-      },
-    
-      async restore_branch({ dir, branch, remote }) {
+    },
+
+    async restore_branch({ dir, branch, remote }) {
         await restoreBranch(dir, branch, remote);
         return {
-          result: JSON.stringify({ message: `Checked out '${branch}'${remote ? ` from ${remote}` : ''}` }),
-          didWriteOp: true
+            result: JSON.stringify({ message: `Checked out '${branch}'${remote ? ` from ${remote}` : ''}` }),
+            didWriteOp: true
         };
-      },
-    
-      async merge_branch({ dir, sourceBranch, sourceRemote, targetBranch, targetRemote }) {
+    },
+
+    async merge_branch({ dir, sourceBranch, sourceRemote, targetBranch, targetRemote }) {
         await mergeBranch(dir, sourceBranch, sourceRemote, targetBranch, targetRemote);
         return {
-          result: JSON.stringify({
-            message: `Merged '${sourceBranch}'${sourceRemote ? ` from ${sourceRemote}` : ''} into '${targetBranch}'`
-          }),
-          didWriteOp: true
+            result: JSON.stringify({
+                message: `Merged '${sourceBranch}'${sourceRemote ? ` from ${sourceRemote}` : ''} into '${targetBranch}'`
+            }),
+            didWriteOp: true
         };
-      },
-    
-      async push_branch({ dir, branch, remote }) {
+    },
+
+    async push_branch({ dir, branch, remote }) {
         await pushBranch(dir, branch, remote);
         return { result: JSON.stringify({ message: `Pushed '${branch}' to '${remote || 'origin'}'` }) };
-      },
-    
-      async pull_branch({ dir, branch, remote }) {
+    },
+
+    async pull_branch({ dir, branch, remote }) {
         await pullBranch(dir, branch, remote);
         return { result: JSON.stringify({ message: `Pulled '${branch}'${remote ? ` from ${remote}` : ''}` }) };
-      },
-    
-      async restore_files_from_ref({ dir, ref, files }) {
+    },
+
+    async restore_files_from_ref({ dir, ref, files }) {
         if (!ref || !files) throw new Error('Missing ref or files');
         await restoreFilesFromRef(dir, ref, files);
         return { result: JSON.stringify({ message: `Restored files from '${ref}'` }), didWriteOp: true };
-      },
-    
-      async remove_local_git_repo({ dir }) {
+    },
+
+    async remove_local_git_repo({ dir }) {
         await removeLocalGitRepo(dir);
         return { result: JSON.stringify({ message: 'Local Git repo removed.' }), didWriteOp: true };
-      },
-    
-      async get_current_branch({ dir }) {
+    },
+
+    async get_current_branch({ dir }) {
         const branch = await getCurrentBranch(dir);
         return { result: JSON.stringify({ branch }) };
-      },
-    
-      async list_remotes({ dir }) {
+    },
+
+    async list_remotes({ dir }) {
         const remotes = await listRemotes(dir);
         return { result: JSON.stringify({ remotes }) };
-      },
-    
-      async set_remote_url({ dir, name, url }) {
+    },
+
+    async set_remote_url({ dir, name, url }) {
         await setRemoteUrl(dir, name, url);
         return { result: JSON.stringify({ message: `Remote '${name}' set to '${url}'.` }) };
-      },
-    
-      async fetch_all({ dir }) {
+    },
+
+    async fetch_all({ dir }) {
         await fetchAll(dir);
         return { result: JSON.stringify({ message: 'Fetched all remotes.' }) };
-      },
-    
-      async hard_reset({ dir, commit }) {
+    },
+
+    async hard_reset({ dir, commit }) {
         await hardReset(dir, commit);
         return { result: JSON.stringify({ message: `Hard reset to '${commit || 'HEAD'}'.` }) };
-      },
-    
-      async stash_all({ dir, includeUntracked }) {
+    },
+
+    async stash_all({ dir, includeUntracked }) {
         const stashRef = await stashAll(dir, includeUntracked);
         return { result: JSON.stringify({ message: `Stashed as ${stashRef}.` }) };
-      },
-    
-      async apply_stash({ dir, stashRef }) {
+    },
+
+    async apply_stash({ dir, stashRef }) {
         await applyStash(dir, stashRef);
         return { result: JSON.stringify({ message: `Applied stash '${stashRef || 'stash@{0}'}'.` }) };
-      },
-    
-      async drop_stash({ dir, stashRef }) {
+    },
+
+    async drop_stash({ dir, stashRef }) {
         await dropStash(dir, stashRef);
         return { result: JSON.stringify({ message: `Dropped stash '${stashRef || 'stash@{0}'}'.` }) };
-      },
-    
-      async clean_working_directory({ dir, force, dirs }) {
+    },
+
+    async clean_working_directory({ dir, force, dirs }) {
         await cleanWorkingDirectory(dir, force, dirs);
         return { result: JSON.stringify({ message: 'Cleaned working directory.' }) };
-      }
+    }
 }

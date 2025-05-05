@@ -35,7 +35,7 @@ async function init() {
 }
 
 async function onRequest(req, res, cfg) {
-  // CORS & preflight
+  // ─────────── CORS & Preflight ─────────────────────────────────
   res.setHeader('Access-Control-Allow-Origin',  '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS,DELETE,PUT,PATCH');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -44,23 +44,23 @@ async function onRequest(req, res, cfg) {
     return res.end();
   }
 
+  // ─────────── URL Parsing ────────────────────────────────────────
   const parsed = new URL(req.url || '/', `http://${req.headers.host}`);
   const { pathname, searchParams } = parsed;
   const method = req.method;
   console.log(method, 'request:', parsed.href);
 
-  // SSE endpoint
+  // ─────────── SSE & WS ──────────────────────────────────────────
   if (pathname === '/events') {
     return handleSse(req, res);
   }
-  // WS endpoint
   if (pathname === '/ws') {
     res.writeHead(426, { 'Content-Type': 'text/plain' });
     return res.end('Upgrade Required');
   }
 
-  // Serve root HTML
-  if (method === 'GET' && (pathname === '/' || pathname === '/gptdev' || pathname === '/gptdev/')) {
+  // ─────────── Serve Root HTML ───────────────────────────────────
+  if (method === 'GET' && ['/', '/gptdev', '/gptdev/'].includes(pathname)) {
     const filePath = path.join(process.cwd(), 'gpt_dev', 'gpt_dev.html');
     try {
       const stat = await fsp.stat(filePath);
@@ -68,24 +68,21 @@ async function onRequest(req, res, cfg) {
         'Content-Type': 'text/html; charset=utf-8',
         'Content-Length': stat.size
       });
-      fs.createReadStream(filePath).pipe(res);
+      return fs.createReadStream(filePath).pipe(res);
     } catch (err) {
       console.error(err);
       res.writeHead(500, { 'Content-Type': 'text/plain' });
-      res.end('Internal Server Error');
+      return res.end('Internal Server Error');
     }
-    return;
   }
 
-  // --- General static file serving ---
+  // ─────────── Static File Serving ───────────────────────────────
   if (method === 'GET') {
-    // Resolve local file path relative to project root
     let safePath = path.normalize(path.join(process.cwd(), pathname));
     if (safePath.startsWith(process.cwd())) {
       try {
         const stat = await fsp.stat(safePath);
         if (stat.isFile()) {
-          // Determine MIME type
           const ext = path.extname(safePath).toLowerCase();
           const mimeTypes = {
             '.js':   'application/javascript',
@@ -106,20 +103,22 @@ async function onRequest(req, res, cfg) {
           return fs.createReadStream(safePath).pipe(res);
         }
       } catch {
-        // File doesn't exist, fall through to route dispatch
+        // fall through to API dispatch
       }
     }
   }
 
-  // --- API route dispatch ---
+  // ─────────── Route Dispatch ─────────────────────────────────────
+  // 1) Find handler & extract path params
   let handler = routesConfig[pathname]?.[method];
-  let params = {};
+  let params  = {};
   if (!handler) {
     for (const [pattern, methods] of Object.entries(routesConfig)) {
       if (!pattern.includes('/:')) continue;
       const parts = pattern.split('/').filter(Boolean);
       const segs  = pathname.split('/').filter(Boolean);
       if (parts.length !== segs.length) continue;
+
       const paramNames = [];
       const regex = new RegExp(
         '^/' + parts.map(p => p.startsWith(':')
@@ -132,14 +131,30 @@ async function onRequest(req, res, cfg) {
       const mhandler = methods[method];
       if (mhandler) {
         handler = mhandler;
-        params = paramNames.reduce((o, name, i) => (o[name] = decodeURIComponent(m[i+1]), o), {});
+        params = paramNames.reduce((o, name, i) => {
+          o[name] = decodeURIComponent(m[i+1]);
+          return o;
+        }, {});
         break;
       }
     }
   }
 
   if (handler) {
+    // ── 2) Parse JSON body if applicable
+    let body = {};
+    if (['POST','PUT','PATCH','DELETE'].includes(method)) {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const raw = Buffer.concat(chunks).toString().trim();
+      try { body = raw ? JSON.parse(raw) : {}; } catch {}
+    }
+
+    // ── 3) Build Koa-style ctx
     const ctx = createHttpContext(req, res, params, Object.fromEntries(searchParams));
+    ctx.request = { query: Object.fromEntries(searchParams), body };
+
+    // ── 4) Invoke handler
     return Promise.resolve(handler(ctx)).catch(err => {
       console.error(err);
       res.writeHead(500, { 'Content-Type': 'application/json' });
@@ -147,10 +162,11 @@ async function onRequest(req, res, cfg) {
     });
   }
 
-  // Not found
+  // ─────────── 404 Not Found ──────────────────────────────────────
   res.writeHead(404, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ error: 'Not Found' }));
 }
+
 
 function createServer(cfg) {
   const server = cfg.protocol === 'https'

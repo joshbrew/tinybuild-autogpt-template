@@ -1,0 +1,268 @@
+/* ./gpt_dev/gitBrowser.css */
+
+:root {
+    --gd-bg: #f5f7fa;
+    --gd-surface: #ffffff;
+    --gd-primary: #2f80ed;
+    --gd-on-primary: #ffffff;
+    --gd-border: #e0e3e8;
+    --gd-error: #ff4d4f;
+    --gd-text: #333;
+    --gd-radius: 6px;
+    --gd-gap: 12px;
+  }
+  
+  .git-desktop {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    background: var(--gd-bg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: var(--gd-text);
+  }
+  
+  /* ─── Toolbar ────────────────────────────────────────────────── */
+  .gd-toolbar {
+    display: flex;
+    align-items: center;
+    padding: var(--gd-gap);
+    background: var(--gd-surface);
+    border-bottom: 1px solid var(--gd-border);
+    gap: var(--gd-gap);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  
+  .gd-toolbar select,
+  .gd-toolbar .gd-btn {
+    height: 32px;
+    border: 1px solid var(--gd-border);
+    border-radius: var(--gd-radius);
+    background: var(--gd-surface);
+    padding: 0 8px;
+    font-size: 14px;
+  }
+  
+  .gd-toolbar .gd-btn {
+    cursor: pointer;
+    background: var(--gd-primary);
+    color: var(--gd-on-primary);
+    border: none;
+    transition: background 0.2s;
+  }
+  
+  .gd-toolbar .gd-btn:hover {
+    background: #1c6fdb;
+  }
+  
+  /* ─── Body ───────────────────────────────────────────────────── */
+  .gd-body {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+  
+  /* ─── File panel ─────────────────────────────────────────────── */
+  .gd-file-panel {
+    flex: 2;
+    display: flex;
+    flex-direction: column;
+    padding: var(--gd-gap);
+    background: var(--gd-surface);
+    border-right: 1px solid var(--gd-border);
+    overflow: hidden;
+    gap: var(--gd-gap);
+  }
+  
+  .gd-file-panel h3 {
+    margin: 0;
+    font-size: 16px;
+    border-bottom: 1px solid var(--gd-border);
+    padding-bottom: 4px;
+  }
+  
+  .gd-file-panel ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    flex: 1;
+    overflow-y: auto;
+    border: 1px solid var(--gd-border);
+    border-radius: var(--gd-radius);
+  }
+  
+  .gd-file-panel li {
+    display: flex;
+    align-items: center;
+    padding: 4px 8px;
+    border-bottom: 1px solid var(--gd-border);
+  }
+  
+  .gd-file-panel li:last-child {
+    border-bottom: none;
+  }
+  
+  .gd-file-panel input[type="checkbox"] {
+    margin-right: 8px;
+  }
+  
+  /* ─── Commit panel ───────────────────────────────────────────── */
+  .gd-commit-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: var(--gd-gap);
+    gap: var(--gd-gap);
+    background: var(--gd-surface);
+    overflow: hidden;
+  }
+  
+  .gd-commit-panel textarea {
+    flex: 1;
+    padding: 8px;
+    font-size: 14px;
+    border: 1px solid var(--gd-border);
+    border-radius: var(--gd-radius);
+    resize: none;
+    font-family: inherit;
+  }
+  
+  .gd-commit-panel .gd-commit-btn {
+    align-self: flex-end;
+    height: 36px;
+    padding: 0 16px;
+    background: var(--gd-primary);
+    color: var(--gd-on-primary);
+    border: none;
+    border-radius: var(--gd-radius);
+    cursor: pointer;
+    font-size: 14px;
+  }
+  
+  .gd-commit-panel .gd-commit-btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  
+  /* ─── Toast ───────────────────────────────────────────────────── */
+  .gd-toast {
+    position: fixed;
+    bottom: var(--gd-gap);
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--gd-primary);
+    color: var(--gd-on-primary);
+    padding: 8px 16px;
+    border-radius: var(--gd-radius);
+    box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+    font-size: 14px;
+    transition: opacity 0.3s;
+  }
+  
+  .gd-toast.error {
+    background: var(--gd-error);
+  }
+  
+  /* ─── Diff panel ─────────────────────────────────────────────── */
+.gd-diff-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    border-left: 1px solid var(--gd-border);
+    overflow: hidden;
+    transition: flex 0.3s ease;
+  }
+  
+  /* start collapsed (zero height) */
+  .gd-diff-panel.collapsed {
+    flex: 0;
+  }
+  
+  /* Header is clickable */
+  .gd-diff-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 var(--gd-gap);
+    background: var(--gd-surface);
+    border-bottom: 1px solid var(--gd-border);
+    cursor: pointer;
+  }
+  
+  /* Button inherits toolbar style */
+  .gd-collapse-btn {
+    height: 28px;
+    padding: 0 6px;
+    font-size: 12px;
+  }
+  
+  /* Scrollable diff content */
+  .gd-diff-content {
+    flex: 1;
+    margin: 0;
+    padding: var(--gd-gap);
+    background: #f0f0f0;
+    font-family: monospace;
+    font-size: 13px;
+    overflow: auto;
+    white-space: pre-wrap;
+  }
+  
+  /* ─── Overlays container ─────────────────────────────────────── */
+.gd-overlays {
+    position: relative;
+    flex: 1;
+    overflow: hidden;
+  }
+  
+  /* ─── Each overlay card ─────────────────────────────────────── */
+  .gd-overlay {
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: var(--gd-surface);
+    border-top: 1px solid var(--gd-border);
+    padding: var(--gd-gap);
+    display: none;
+    overflow: auto;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+  }
+  
+  /* active overlay */
+  .gd-overlay.active {
+    display: block;
+  }
+  
+  /* simple panel tabs */
+  .gd-panel-tabs {
+    margin-left: auto;
+  }
+  .gd-panel-tabs button {
+    background: transparent;
+    border: none;
+    padding: 4px 8px;
+    font-size: 14px;
+    cursor: pointer;
+    color: var(--gd-text);
+  }
+  .gd-panel-tabs button.active {
+    border-bottom: 2px solid var(--gd-primary);
+    color: var(--gd-primary);
+  }
+  
+  /* Diff content scroll */
+  .gd-diff-content {
+    height: calc(100% - 24px); /* account for header */
+    overflow: auto;
+    background: #f0f0f0;
+    padding: var(--gd-gap);
+    font-family: monospace;
+    white-space: pre-wrap;
+  }
+  
+  /* Adjust file/commit panels inside overlay */
+  .gd-overlay--changes .gd-file-panel,
+  .gd-overlay--changes .gd-commit-panel {
+    margin-bottom: var(--gd-gap);
+  }
+  

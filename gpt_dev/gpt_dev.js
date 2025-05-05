@@ -1,3 +1,5 @@
+//./gpt_dev/gpt_dev.js
+import './gitBrowser'
 import './gpt_dev.css';
 
 import { 
@@ -567,7 +569,19 @@ class GptChat extends HTMLElement {
 
       const modal = document.createElement('div');
       modal.id = 'fileModal';
-      modal.innerHTML = '<button class="close">✖</button>';
+      modal.innerHTML = `
+        <button class="close">✖</button>
+        <div class="file-git-container">
+          <div class="file-tree-panel">
+            <h3>Files</h3>
+            <ul class="file-tree-root"></ul>
+          </div>
+          <div class="git-browser-panel">
+            <h3>Git Browser</h3>
+            <git-desktop></git-desktop>
+          </div>
+        </div>
+      `;
       modal.querySelector('.close').onclick = () => modal.remove();
 
       // ───────────── recursive renderer ─────────────
@@ -603,9 +617,9 @@ class GptChat extends HTMLElement {
         return li;
       }
 
-      const ul = document.createElement('ul');
-      tree.forEach(n => ul.append(render(n)));
-      modal.append(ul);
+      const treeRoot = modal.querySelector('.file-tree-root');
+      tree.forEach(node => treeRoot.append(render(node)));
+    
       document.body.append(modal);
     } catch (err) {
       console.error(err);

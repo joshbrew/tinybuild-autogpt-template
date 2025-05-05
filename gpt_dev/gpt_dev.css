@@ -556,3 +556,28 @@ button:hover {
 #fileModal .file-node.collapsed + ul {
   display: none;
 }
+
+#fileModal .file-git-container {
+  display: flex;
+  width: 90vw;
+  height: 80vh;
+}
+#fileModal .file-tree-panel,
+#fileModal .git-browser-panel {
+  flex: 1;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid #ddd;
+  background: #fff;
+}
+#fileModal .file-tree-panel {
+  margin-right: 8px;
+}
+#fileModal .git-browser-panel {
+  margin-left: 8px;
+}
+#fileModal .file-tree-panel h3,
+#fileModal .git-browser-panel h3 {
+  margin-top: 0;
+  font-size: 14px;
+}

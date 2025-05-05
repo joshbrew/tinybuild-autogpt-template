@@ -1,5 +1,7 @@
 ## Automated web dev server with chat prompt and tool calls.
 
+WIP, might be busted (limit your budget!!!!)
+
 Currently uses 4.1-mini at the base (200K tokens for threads/assistants) and can prompt summary models or smarter models for help with prompts and context sizes. We tried to throttle it as best as possible so the context sizes are respected.
 
 <table>

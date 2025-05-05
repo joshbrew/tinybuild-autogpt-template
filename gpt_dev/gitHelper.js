@@ -45,6 +45,7 @@ export async function removeLocalGitRepo(dir) {
  */
 export async function commitGitSnapshot(dir, paths = []) {
     try {
+<<<<<<< Updated upstream
         // 1) Make sure .git exists
         await ensureLocalRepo(dir);
 
@@ -76,6 +77,42 @@ export async function commitGitSnapshot(dir, paths = []) {
             console.log(`⚡ Pushed snapshot to origin/${branchName}`);
         }
 
+=======
+      // 1) boot up repo if needed
+      await ensureLocalRepo(dir);
+  
+      // 2) switch to your AI branch
+      const branch = await ensureAISnapshotBranch(dir);
+  
+      // 3) see if there’s anything to do
+      const { stdout: status } = await execP(
+        'git status --porcelain',
+        { cwd: dir }
+      );
+      if (!status.trim()) {
+        console.log('⚡ No changes – skipping AI commit.');
+        return;
+      }
+  
+      // 4) stage only what you asked (or everything)
+      const toAdd = paths.length ? paths.join(' ') : '.';
+      await execP(`git add ${toAdd}`, { cwd: dir });
+  
+      // 5) commit with timestamp
+      const ts = new Date().toISOString().replace(/[:.]/g,'-');
+      await execP(
+        `git commit -m "🤖 AI run @ ${ts}"`,
+        { cwd: dir }
+      );
+      console.log(`⚡ Committed to ${branch}`);
+  
+    // 6) push if there’s an origin
+    //   const { stdout: remotes } = await execP('git remote', { cwd: dir });
+    //   if (remotes.trim()) {
+    //     await execP(`git push -u origin ${branch}`, { cwd: dir });
+    //     console.log(`⚡ Pushed snapshot to origin/${branch}`);
+        //   }
+>>>>>>> Stashed changes
     } catch (err) {
         console.warn('⚠️ Git snapshot failed:', err);
     }

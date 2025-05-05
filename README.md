@@ -36,6 +36,8 @@ It's rudimentary but it's quite usable. Minimal dependencies (openai, dotenv, co
 
 ## Build and run
 
+You need git cli for version control to work.
+
 First, in this directory, run: 
 
 `npm install`

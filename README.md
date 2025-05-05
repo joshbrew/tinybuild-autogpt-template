@@ -1,8 +1,8 @@
 ## Automated web dev server with chat prompt and tool calls.
 
-WIP, might be busted (limit your api budget to <$10 !!!!)
-
 Currently uses 4.1-mini at the base (200K tokens for threads/assistants) and can prompt summary models or smarter models for help with prompts and context sizes. We tried to throttle it as best as possible so the context sizes are respected.
+
+WIP (limit your api budget to <$10 !!!!)
 
 <table>
   <tr>
@@ -34,7 +34,7 @@ Currently uses 4.1-mini at the base (200K tokens for threads/assistants) and can
 
 ### [Example Video](https://youtu.be/84Pggzt8A0c)
 
-It's rudimentary but it's quite usable. Minimal dependencies (openai, dotenv, concurrently, tinybuild, ws, better-sse).
+It's rudimentary but it's quite usable. Minimal dependencies (openai, dotenv, concurrently, tinybuild, ws, better-sse, git).
 
 ## Build and run
 

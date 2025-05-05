@@ -4,80 +4,88 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
-import { SAVED_DIR } from './clientConfig.js';
+
+const SAVED_DIR = process.cwd();
+console.log("CWD:",process.cwd());
 
 const execP = promisify(exec);
 
+
 /**
- * Initialize a Git repository in the given directory if not already present.
- * @param {string} dir - Path to the target Git directory (e.g., gpt_dev/saved).
+ * Ensure there’s a Git repo in `dir` (and make the first commit if needed).
  */
 export async function ensureLocalRepo(dir) {
     const gitDir = path.join(dir, '.git');
     if (!fs.existsSync(gitDir)) {
-        await execP('git init', { cwd: dir });
-        await execP('git add .', { cwd: dir });
-        await execP('git commit -m "🔖 initial AI-saved snapshot"', { cwd: dir });
+      await execP('git init', { cwd: dir });
+      await execP('git add .', { cwd: dir });
+      await execP('git commit -m "🔖 initial AI-saved snapshot"', { cwd: dir });
     }
 }
-
-/**
- * Remove the local Git repository (delete the .git folder) so you can start fresh.
- * @param {string} dir - Path to the target directory (e.g. SAVED_DIR).
- */
-export async function removeLocalGitRepo(dir) {
-    const gitDir = path.join(dir, '.git');
-    if (fs.existsSync(gitDir)) {
-        // Use fs.promises.rm to delete recursively and force‐remove
-        await fs.promises.rm(gitDir, { recursive: true, force: true });
-        console.log(`⚡ Removed local Git repo at ${gitDir}`);
-    } else {
-        console.log(`ℹ️ No .git folder found in ${dir}, nothing to remove.`);
-    }
-}
-
-/**
- * Commit all current changes in `paths` (or everything if empty) with a timestamped message.
- * If a remote is configured, also push to it.
- *
- * @param {string} dir      - Path to the Git repository.
- * @param {string[]} [paths] - Relative paths (files or folders) to stage & commit.
- */
-export async function commitGitSnapshot(dir, paths = []) {
+  
+  /**
+   * Read the AI‐snapshot branch from Git config, or return null if unset.
+   */
+  async function getAISnapshotBranch(dir) {
     try {
-<<<<<<< Updated upstream
-        // 1) Make sure .git exists
-        await ensureLocalRepo(dir);
-
-        // 2) Check for any changes
-        const { stdout: status } = await execP('git status --porcelain', { cwd: dir });
-        if (!status.trim()) {
-            console.log('⚡ No changes detected in', dir, '– skipping commit.');
-            return;
-        }
-
-        // 3) Stage only the specified paths (or all if none given)
-        const toAdd = paths.length ? paths.join(' ') : '.';
-        await execP(`git add ${toAdd}`, { cwd: dir });
-
-        // 4) Commit
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        await execP(`git commit -m "🤖 AI run @ ${timestamp}"`, { cwd: dir });
-        console.log(`⚡ Backed up ${paths.length ? toAdd : 'all changes'} in local git.`);
-
-        // 5) Push if remote exists
-        const { stdout: remotes } = await execP('git remote', { cwd: dir });
-        if (remotes.trim()) {
-            const { stdout: branch } = await execP(
-                'git rev-parse --abbrev-ref HEAD',
-                { cwd: dir }
-            );
-            const branchName = branch.trim();
-            await execP(`git push -u origin ${branchName}`, { cwd: dir });
-            console.log(`⚡ Pushed snapshot to origin/${branchName}`);
-        }
-
-=======
+      const { stdout } = await execP(
+        'git config --local ai.snapshotBranch',
+        { cwd: dir }
+      );
+      return stdout.trim() || null;
+    } catch {
+      return null;
+    }
+  }
+  
+  /**
+   * Write the AI‐snapshot branch into Git config.
+   */
+  async function setAISnapshotBranch(dir, branch) {
+    await execP(
+      `git config --local ai.snapshotBranch ${branch}`,
+      { cwd: dir }
+    );
+  }
+  
+  /**
+   * Make sure we’re on an “ai-branchN”:
+   *  • if ai.snapshotBranch is set, just check it out
+   *  • otherwise pick the next ai-branchN (based on existing names),
+   *    create & checkout it, and record it in config.
+   */
+  async function ensureAISnapshotBranch(dir) {
+    let branch = await getAISnapshotBranch(dir);
+    if (branch) {
+      await execP(`git checkout ${branch}`, { cwd: dir });
+      return branch;
+    }
+  
+    // find existing ai-branch* names
+    const { stdout } = await execP(
+      'git branch --list "ai-branch*"',
+      { cwd: dir }
+    );
+    const existing = stdout
+      .split('\n')
+      .map(l => l.replace('*','').trim())
+      .filter(Boolean);
+  
+    const nextNum = existing.length + 1;
+    branch = `ai-branch${nextNum}`;
+    await execP(`git checkout -b ${branch}`, { cwd: dir });
+    await setAISnapshotBranch(dir, branch);
+    return branch;
+  }
+  
+  /**
+   * Stage & commit (and push) only on your AI branch.
+   *
+   * @param {string} dir      – path to the repo
+   * @param {string[]} paths  – optional list of files/folders to stage
+   */
+  export async function commitGitSnapshot(dir=process.cwd(), paths = []) {
+    try {
       // 1) boot up repo if needed
       await ensureLocalRepo(dir);
   
@@ -106,18 +114,16 @@ export async function commitGitSnapshot(dir, paths = []) {
       );
       console.log(`⚡ Committed to ${branch}`);
   
-    // 6) push if there’s an origin
-    //   const { stdout: remotes } = await execP('git remote', { cwd: dir });
-    //   if (remotes.trim()) {
-    //     await execP(`git push -u origin ${branch}`, { cwd: dir });
-    //     console.log(`⚡ Pushed snapshot to origin/${branch}`);
+      // 6) push if there’s an origin
+        //   const { stdout: remotes } = await execP('git remote', { cwd: dir });
+        //   if (remotes.trim()) {
+        //     await execP(`git push -u origin ${branch}`, { cwd: dir });
+        //     console.log(`⚡ Pushed snapshot to origin/${branch}`);
         //   }
->>>>>>> Stashed changes
     } catch (err) {
-        console.warn('⚠️ Git snapshot failed:', err);
+      console.warn('⚠️ Git snapshot failed:', err);
     }
-}
-
+  }
 
 
 /**

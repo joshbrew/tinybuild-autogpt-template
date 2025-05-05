@@ -38,7 +38,7 @@ It's rudimentary but it's quite usable. Minimal dependencies (openai, dotenv, co
 
 ## Build and run
 
-You need git cli for version control to work.
+You need [git cli](https://git-scm.com/downloads) for version control to work.
 
 First, in this directory, run: 
 
@@ -103,6 +103,10 @@ See [`./tinybuild.config.js`](./tinybuild.config.js) for settings.
 Add build:true for build-only, add serve:true for serve-only, or set bundle or server to false alternatively.
 
 ## TODO:
+
+WIP git management:
+![image](https://github.com/user-attachments/assets/d899dc75-01da-4135-b6bb-023d513f3391)
+
 
 - Improve chat frontend further. More options and guides etc.
 - Test tool calls further. Test limits. 

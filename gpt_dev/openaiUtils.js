@@ -1023,7 +1023,7 @@ export async function handlePrompt({ prompt, threadId, title, systemPrompt }, sa
 
         //save the snapshot if edits occurred
         if (writeOp) {
-          await commitGitSnapshot(savedDir, [ path.join(process.cwd(),'../../') ]);
+          await commitGitSnapshot();
         }
     
         return {

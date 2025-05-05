@@ -479,20 +479,20 @@ export async function stageFiles(dir, files) {
     // git add each file
     const fileList = Array.isArray(files) ? files.join(' ') : files;
     await execP(`git add ${fileList}`, { cwd: dir });
-  }
-  
-  /**
-   * Unstage one or more paths (reset them from the index).
-   * @param {string} dir   – repo directory
-   * @param {string[]} files – list of file paths to unstage
-   */
-  export async function unstageFiles(dir, files) {
+}
+
+/**
+ * Unstage one or more paths (reset them from the index).
+ * @param {string} dir   – repo directory
+ * @param {string[]} files – list of file paths to unstage
+ */
+export async function unstageFiles(dir, files) {
     await ensureLocalRepo(dir);
     const fileList = Array.isArray(files) ? files.join(' ') : files;
     // reset only those files in the index back to HEAD
     await execP(`git reset HEAD -- ${fileList}`, { cwd: dir });
-  }
-  
+}
+
 
 
 /**
@@ -555,6 +555,18 @@ export async function getStatus(dir) {
     return { staged, unstaged };
 }
 
+
+/**
+ * Roll back the current branch by one commit (hard reset to HEAD~1).
+ * @param {string} dir – path to the Git repo
+ */
+export async function rollbackOne(dir) {
+    // ensure we have a repo
+    await ensureLocalRepo(dir);
+    // hard reset HEAD back one
+    await execP('git reset --hard HEAD~1', { cwd: dir });
+}
+
 // ─── Service adapters ─────────────────────────────────────────────────────────
 const gitServices = {
     listVersions: ({ maxCount }) => listVersions(GIT_DIR, maxCount).then(versions => ({ versions })),
@@ -608,9 +620,10 @@ const gitServices = {
     cleanWorkdir: ({ force, dirs }) =>
         cleanWorkingDirectory(GIT_DIR, force, dirs)
             .then(() => ({ message: 'Cleaned working directory.' })),
+    rollbackOne: () => rollbackOne(GIT_DIR).then(() => ({ message: 'Rolled back one commit' })),
     status: () => getStatus(GIT_DIR).then(({ staged, unstaged }) => ({ staged, unstaged })),
-    stage:    ({ files }) => stageFiles(GIT_DIR, files).then(() => ({ message: `Staged ${files.join(', ')}` })),
-  unstage:  ({ files }) => unstageFiles(GIT_DIR, files).then(() => ({ message: `Unstaged ${files.join(', ')}` })),
+    stage: ({ files }) => stageFiles(GIT_DIR, files).then(() => ({ message: `Staged ${files.join(', ')}` })),
+    unstage: ({ files }) => unstageFiles(GIT_DIR, files).then(() => ({ message: `Unstaged ${files.join(', ')}` })),
     getCompare: ({ ref }) => getCompare(GIT_DIR, ref).then(changelog => ({ changelog }))
 };
 
@@ -648,9 +661,9 @@ export const getCompareRoute = makeRoute(
     gitServices.getCompare,
     { required: ['ref'], method: 'POST' }
 );
-export const stageRoute   = makeRoute(gitServices.stage,   { required: ['files'], method: 'POST' });
+export const stageRoute = makeRoute(gitServices.stage, { required: ['files'], method: 'POST' });
 export const unstageRoute = makeRoute(gitServices.unstage, { required: ['files'], method: 'POST' });
-
+export const rollbackOneRoute = makeRoute(gitServices.rollbackOne, { required: [], method: 'POST' });
 
 /**
  * Route configuration mapping HTTP paths to handlers.
@@ -677,7 +690,8 @@ export const routesConfig = {
     '/api/git/commit-paths': { POST: commitPathsRoute },
     '/api/git/status': { GET: statusRoute },
     '/api/git/compare': { POST: getCompareRoute },
-    '/api/git/stage':   { POST: stageRoute },
+    '/api/git/stage': { POST: stageRoute },
+    '/api/git/rollback-one': { POST: rollbackOneRoute },
     '/api/git/unstage': { POST: unstageRoute }
 };
 
@@ -803,6 +817,18 @@ export const gitToolCalls = {
     async clean_working_directory({ dir, force, dirs }) {
         await cleanWorkingDirectory(dir, force, dirs);
         return { result: JSON.stringify({ message: 'Cleaned working directory.' }) };
+    },
+
+    /**
+   * Roll back current branch one commit.
+   * @param {string} dir – path to the Git repo
+   */
+    async rollback_one({ dir }) {
+        await rollbackOne(dir);
+        return {
+            result: JSON.stringify({ message: `Rolled back one commit in ${dir}` }),
+            didWriteOp: true
+        };
     },
 
     /**

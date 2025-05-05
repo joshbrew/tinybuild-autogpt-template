@@ -20,6 +20,7 @@ template.innerHTML = `
       <details class="gd-more-menu">
         <summary>•••</summary>
         <div class="gd-menu-items">
+          <button class="gd-btn" data-op="rollback-one">Rollback One</button>
           <button class="gd-btn" data-op="fetch-all">Fetch</button>
           <button class="gd-btn" data-op="pull">Pull</button>
           <button class="gd-btn" data-op="push">Push</button>
@@ -276,6 +277,27 @@ class GitDesktop extends HTMLElement {
     }
   }
 
+  /**
+   * Roll back current branch by one commit, then refresh UI.
+   */
+  async rollbackOne() {
+    if (!confirm('Are you sure you want to roll back the last commit on this branch?')) return;
+    try {
+      const { message } = await this._api('/api/git/rollback-one', 'POST');
+      this.showToast(message);
+      // refresh everything:
+      await Promise.all([
+        this.loadBranches(),
+        this.loadStatus(),
+        this.loadVersions()
+      ]);
+      this.previewBranch();
+    } catch (err) {
+      console.error('Rollback failed:', err);
+      this.showToast(`Rollback failed: ${err.message}`, true);
+    }
+  }
+  
   // populate and enable the versions dropdown
   async loadVersions() {
     const { versions } = await this._api('/api/git/versions', 'POST', { maxCount: 50 });

@@ -204,8 +204,7 @@ export const baseFunctionSchemas = [
       },
       required: ['summary_prompt']
     }
-  },
-
+  }
   
 ];
 
@@ -401,7 +400,25 @@ export const gitFunctionSchemas = [
       },
       required: ["dir", "ref", "summary_prompt"]
     }
-  }  
+  },
+  {
+    name: 'rollback_one',
+    description: 'Uses the Git CLI (`git reset --hard HEAD~1`) to roll back the current branch by exactly one commit. Only invoke when the user explicitly asks to roll back the last commit.',
+    parameters: {
+      type: 'object',
+      properties: {
+        dir: {
+          type: 'string',
+          description: 'Path to the Git repository directory'
+        },
+        summary_prompt: {
+          type: 'string',
+          description: 'System prompt for summarizing the rollback result.'
+        }
+      },
+      required: ['dir', 'summary_prompt']
+    }
+  }
 
 ];
 

@@ -221,7 +221,64 @@ export async function deleteBranch(dir, branch, remote, force = false) {
     }
 }
 
+<<<<<<< Updated upstream
 
+=======
+/**
+ * Checkout a branch locally or create tracking branch for remote.
+ * Failsafe: init repo if no remote.
+ * @param {string} dir - Repo directory.
+ * @param {string} branch - Branch name to checkout.
+ * @param {string} [remote] - Remote name (if tracking).
+ */
+export async function restoreBranch(dir, branch, remote) {
+    await ensureLocalRepo(dir);
+  
+    // 1) remove stale lock if present
+    const lock = path.join(dir, '.git', 'index.lock');
+    try { 
+      await fs.promises.unlink(lock);
+    } catch {
+      // nothing to remove
+    }
+  
+    // 2) stash uncommitted changes & untracked files (ignore failures)
+    try {
+      await execP(
+        'git stash push --include-untracked -m "auto-stash before checkout"',
+        { cwd: dir }
+      );
+    } catch {
+      // e.g. “No local changes to save” or other errors → ignore
+    }
+  
+    // 3) perform the checkout
+    if (remote) {
+      await execP(`git fetch ${remote}`, { cwd: dir });
+      await execP(`git checkout --track ${remote}/${branch}`, { cwd: dir });
+    } else {
+      let exists = true;
+      try {
+        await execP(`git rev-parse --verify ${branch}`, { cwd: dir });
+      } catch {
+        exists = false;
+      }
+      if (exists) {
+        await execP(`git checkout ${branch}`, { cwd: dir });
+      } else {
+        await execP(`git checkout -b ${branch}`, { cwd: dir });
+      }
+    }
+  
+    // 4) reapply stash (ignore conflicts or “nothing to apply”)
+    try {
+      await execP('git stash apply', { cwd: dir });
+    } catch {
+      // safe to ignore
+    }
+  }
+  
+>>>>>>> Stashed changes
 /**
  * Checkout or create a branch.
  * @param {string} dir     Git repo root

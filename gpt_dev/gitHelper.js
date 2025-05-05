@@ -221,16 +221,14 @@ export async function deleteBranch(dir, branch, remote, force = false) {
     }
 }
 
-<<<<<<< Updated upstream
 
-=======
 /**
- * Checkout a branch locally or create tracking branch for remote.
- * Failsafe: init repo if no remote.
- * @param {string} dir - Repo directory.
- * @param {string} branch - Branch name to checkout.
- * @param {string} [remote] - Remote name (if tracking).
+ * Checkout or create a branch.
+ * @param {string} dir     Git repo root
+ * @param {string} branch  Branch name
+ * @param {string} remote? Remote name, e.g. 'origin'
  */
+
 export async function restoreBranch(dir, branch, remote) {
     await ensureLocalRepo(dir);
   
@@ -275,42 +273,6 @@ export async function restoreBranch(dir, branch, remote) {
       await execP('git stash apply', { cwd: dir });
     } catch {
       // safe to ignore
-    }
-  }
-  
->>>>>>> Stashed changes
-/**
- * Checkout or create a branch.
- * @param {string} dir     Git repo root
- * @param {string} branch  Branch name
- * @param {string} remote? Remote name, e.g. 'origin'
- */
-
-export async function restoreBranch(dir, branch, remote) {
-    await ensureLocalRepo(dir);
-  
-    if (remote) {
-      // fetch + track remote branch
-      await execP(`git fetch ${remote}`, { cwd: dir });
-      await execP(`git checkout --track ${remote}/${branch}`, { cwd: dir });
-    } else {
-      // 1) check if branch exists locally
-      let exists = false;
-      try {
-        // this will succeed if `<branch>` is a local ref
-        await execP(`git rev-parse --verify ${branch}`, { cwd: dir });
-        exists = true;
-      } catch {
-        exists = false;
-      }
-  
-      if (exists) {
-        // 2a) switch to it
-        await execP(`git checkout ${branch}`, { cwd: dir });
-      } else {
-        // 2b) create & switch
-        await execP(`git checkout -b ${branch}`, { cwd: dir });
-      }
     }
   }
   

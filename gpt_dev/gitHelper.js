@@ -54,27 +54,41 @@ export async function ensureLocalRepo(dir) {
    *  • otherwise pick the next ai-branchN (based on existing names),
    *    create & checkout it, and record it in config.
    */
-  async function ensureAISnapshotBranch(dir) {
+
+/**
+ * Make sure we’re on an “ai-branchN”:
+ *  • if ai.snapshotBranch is set, stash, checkout & re-apply stash
+ *  • otherwise pick the next ai-branchN, create & checkout it, and record it
+ */
+async function ensureAISnapshotBranch(dir) {
+    // stash everything (including untracked)
+    await execP('git stash push --include-untracked -m "AI auto-stash before branch switch"', { cwd: dir });
+  
     let branch = await getAISnapshotBranch(dir);
     if (branch) {
+      // checkout existing AI branch
       await execP(`git checkout ${branch}`, { cwd: dir });
-      return branch;
+    } else {
+      // find existing ai-branch* names
+      const { stdout } = await execP(
+        'git branch --list "ai-branch*"',
+        { cwd: dir }
+      );
+      const existing = stdout
+        .split('\n')
+        .map(l => l.replace('*','').trim())
+        .filter(Boolean);
+  
+      const nextNum = existing.length + 1;
+      branch = `ai-branch${nextNum}`;
+      await execP(`git checkout -b ${branch}`, { cwd: dir });
+      await setAISnapshotBranch(dir, branch);
     }
   
-    // find existing ai-branch* names
-    const { stdout } = await execP(
-      'git branch --list "ai-branch*"',
-      { cwd: dir }
-    );
-    const existing = stdout
-      .split('\n')
-      .map(l => l.replace('*','').trim())
-      .filter(Boolean);
+    // re-apply stash so you keep your working changes
+    // this will pop the most recent stash entry
+    await execP('git stash apply', { cwd: dir });
   
-    const nextNum = existing.length + 1;
-    branch = `ai-branch${nextNum}`;
-    await execP(`git checkout -b ${branch}`, { cwd: dir });
-    await setAISnapshotBranch(dir, branch);
     return branch;
   }
   

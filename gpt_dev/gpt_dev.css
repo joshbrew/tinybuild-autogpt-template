@@ -563,6 +563,11 @@ button:hover {
   height: 80vh;
 }
 #fileModal .file-tree-panel,
+
+#fileModal .git-desktop {
+  height: 100%;
+}
+
 #fileModal .git-browser-panel {
   flex: 1;
   overflow: auto;

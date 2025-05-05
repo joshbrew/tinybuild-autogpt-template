@@ -28,6 +28,9 @@ import path from 'path'
 export const SAVED_DIR = process.env.SAVED_DIR ||
   path.join(process.cwd(), 'gpt_dev/saved');
 
+  
+export const GIT_DIR = process.cwd();
+
 export const ASSISTANT_FILE = path.join(SAVED_DIR, 'assistant.json');
 
 export const PRUNED_SUMMARY_TOKENS = 5120; //tokens for presevering the context > 10 messages in a thread. important for not overloading the token limitations of the model.

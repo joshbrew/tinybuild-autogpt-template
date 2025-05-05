@@ -379,7 +379,29 @@ export const gitFunctionSchemas = [
       },
       required: ['dir', 'summary_prompt']
     }
-  }
+  },
+  {
+    name: "get_compare",
+    description: "Uses the Git CLI (`git diff HEAD..<ref>`) to compare the current HEAD against a given branch or commit. Only invoke when the user explicitly asks to compare.",
+    parameters: {
+      type: "object",
+      properties: {
+        dir: {
+          type: "string",
+          description: "Path to the Git repository directory"
+        },
+        ref: {
+        type: "string",
+          description: "Branch name or commit SHA to diff against HEAD"
+        },
+        summary_prompt: {
+          type: "string",
+          description: "System prompt for summarizing the compare result."
+        }
+      },
+      required: ["dir", "ref", "summary_prompt"]
+    }
+  }  
 
 ];
 

@@ -4,9 +4,9 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
+import { GIT_DIR } from './clientConfig.js'
 
-const SAVED_DIR = process.cwd();
-console.log("CWD:",process.cwd());
+console.log("CWD:", process.cwd());
 
 const execP = promisify(exec);
 
@@ -17,43 +17,43 @@ const execP = promisify(exec);
 export async function ensureLocalRepo(dir) {
     const gitDir = path.join(dir, '.git');
     if (!fs.existsSync(gitDir)) {
-      await execP('git init', { cwd: dir });
-      await execP('git add .', { cwd: dir });
-      await execP('git commit -m "🔖 initial AI-saved snapshot"', { cwd: dir });
+        await execP('git init', { cwd: dir });
+        await execP('git add .', { cwd: dir });
+        await execP('git commit -m "🔖 initial AI-saved snapshot"', { cwd: dir });
     }
 }
-  
-  /**
-   * Read the AI‐snapshot branch from Git config, or return null if unset.
-   */
-  async function getAISnapshotBranch(dir) {
+
+/**
+ * Read the AI‐snapshot branch from Git config, or return null if unset.
+ */
+async function getAISnapshotBranch(dir) {
     try {
-      const { stdout } = await execP(
-        'git config --local ai.snapshotBranch',
-        { cwd: dir }
-      );
-      return stdout.trim() || null;
+        const { stdout } = await execP(
+            'git config --local ai.snapshotBranch',
+            { cwd: dir }
+        );
+        return stdout.trim() || null;
     } catch {
-      return null;
+        return null;
     }
-  }
-  
-  /**
-   * Write the AI‐snapshot branch into Git config.
-   */
-  async function setAISnapshotBranch(dir, branch) {
+}
+
+/**
+ * Write the AI‐snapshot branch into Git config.
+ */
+async function setAISnapshotBranch(dir, branch) {
     await execP(
-      `git config --local ai.snapshotBranch ${branch}`,
-      { cwd: dir }
+        `git config --local ai.snapshotBranch ${branch}`,
+        { cwd: dir }
     );
-  }
-  
-  /**
-   * Make sure we’re on an “ai-branchN”:
-   *  • if ai.snapshotBranch is set, just check it out
-   *  • otherwise pick the next ai-branchN (based on existing names),
-   *    create & checkout it, and record it in config.
-   */
+}
+
+/**
+ * Make sure we’re on an “ai-branchN”:
+ *  • if ai.snapshotBranch is set, just check it out
+ *  • otherwise pick the next ai-branchN (based on existing names),
+ *    create & checkout it, and record it in config.
+ */
 
 /**
  * Make sure we’re on an “ai-branchN”:
@@ -63,81 +63,81 @@ export async function ensureLocalRepo(dir) {
 async function ensureAISnapshotBranch(dir) {
     // stash everything (including untracked)
     await execP('git stash push --include-untracked -m "AI auto-stash before branch switch"', { cwd: dir });
-  
+
     let branch = await getAISnapshotBranch(dir);
     if (branch) {
-      // checkout existing AI branch
-      await execP(`git checkout ${branch}`, { cwd: dir });
+        // checkout existing AI branch
+        await execP(`git checkout ${branch}`, { cwd: dir });
     } else {
-      // find existing ai-branch* names
-      const { stdout } = await execP(
-        'git branch --list "ai-branch*"',
-        { cwd: dir }
-      );
-      const existing = stdout
-        .split('\n')
-        .map(l => l.replace('*','').trim())
-        .filter(Boolean);
-  
-      const nextNum = existing.length + 1;
-      branch = `ai-branch${nextNum}`;
-      await execP(`git checkout -b ${branch}`, { cwd: dir });
-      await setAISnapshotBranch(dir, branch);
+        // find existing ai-branch* names
+        const { stdout } = await execP(
+            'git branch --list "ai-branch*"',
+            { cwd: dir }
+        );
+        const existing = stdout
+            .split('\n')
+            .map(l => l.replace('*', '').trim())
+            .filter(Boolean);
+
+        const nextNum = existing.length + 1;
+        branch = `ai-branch${nextNum}`;
+        await execP(`git checkout -b ${branch}`, { cwd: dir });
+        await setAISnapshotBranch(dir, branch);
     }
-  
+
     // re-apply stash so you keep your working changes
     // this will pop the most recent stash entry
     await execP('git stash apply', { cwd: dir });
-  
+
     return branch;
-  }
-  
-  /**
-   * Stage & commit (and push) only on your AI branch.
-   *
-   * @param {string} dir      – path to the repo
-   * @param {string[]} paths  – optional list of files/folders to stage
-   */
-  export async function commitGitSnapshot(dir=process.cwd(), paths = []) {
+}
+
+/**
+ * Stage & commit (and push) only on your AI branch.
+ *
+ * @param {string} dir      – path to the repo
+ * @param {string[]} paths  – optional list of files/folders to stage
+ */
+export async function commitGitSnapshot(dir = process.cwd(), paths = []) {
     try {
-      // 1) boot up repo if needed
-      await ensureLocalRepo(dir);
-  
-      // 2) switch to your AI branch
-      const branch = await ensureAISnapshotBranch(dir);
-  
-      // 3) see if there’s anything to do
-      const { stdout: status } = await execP(
-        'git status --porcelain',
-        { cwd: dir }
-      );
-      if (!status.trim()) {
-        console.log('⚡ No changes – skipping AI commit.');
-        return;
-      }
-  
-      // 4) stage only what you asked (or everything)
-      const toAdd = paths.length ? paths.join(' ') : '.';
-      await execP(`git add ${toAdd}`, { cwd: dir });
-  
-      // 5) commit with timestamp
-      const ts = new Date().toISOString().replace(/[:.]/g,'-');
-      await execP(
-        `git commit -m "🤖 AI run @ ${ts}"`,
-        { cwd: dir }
-      );
-      console.log(`⚡ Committed to ${branch}`);
-  
-      // 6) push if there’s an origin
+        // 1) boot up repo if needed
+        await ensureLocalRepo(dir);
+
+        // 2) switch to your AI branch
+        const branch = await ensureAISnapshotBranch(dir);
+
+        // 3) see if there’s anything to do
+        const { stdout: status } = await execP(
+            'git status --porcelain',
+            { cwd: dir }
+        );
+        if (!status.trim()) {
+            console.log('⚡ No changes – skipping AI commit.');
+            return;
+        }
+
+        // 4) stage only what you asked (or everything)
+        const toAdd = paths.length ? paths.join(' ') : '.';
+        await execP(`git add ${toAdd}`, { cwd: dir });
+
+        // 5) commit with timestamp
+        const ts = new Date().toISOString().replace(/[:.]/g, '-');
+        await execP(
+            `git commit -m "🤖 AI run @ ${ts}"`,
+            { cwd: dir }
+        );
+        console.log(`⚡ Committed to ${branch}`);
+
+        // 6) push if there’s an origin
         //   const { stdout: remotes } = await execP('git remote', { cwd: dir });
         //   if (remotes.trim()) {
         //     await execP(`git push -u origin ${branch}`, { cwd: dir });
         //     console.log(`⚡ Pushed snapshot to origin/${branch}`);
         //   }
     } catch (err) {
-      console.warn('⚠️ Git snapshot failed:', err);
+        console.warn('⚠️ Git snapshot failed:', err);
     }
-  }
+}
 
 
 /**
@@ -163,18 +163,39 @@ export async function listVersions(dir, maxCount) {
 const DEFAULT_MAX_BUFFER = 10 * 1024 * 1024; // 10 MB
 export async function getChangelog(dir, ref) {
     try {
-      // bump the buffer
-      const { stdout } = await execP(
-        `git log -p ${ref}`,
-        { cwd: dir, maxBuffer: DEFAULT_MAX_BUFFER }
-      );
-      return stdout;
+        const { stdout } = await execP(
+            `git log -1 -p ${ref}`,
+            { cwd: dir, maxBuffer: DEFAULT_MAX_BUFFER }
+        );
+        return stdout;
     } catch (err) {
-      console.error('getChangelog failed:', err);
-      throw new Error(`Could not get diff for “${ref}”: ${err.stderr || err.message}`);
+        console.error('getChangelog failed:', err);
+        throw new Error(`Could not get diff for “${ref}”: ${err.stderr || err.message}`);
     }
-  }
-  
+}
+
+
+/**
+ * Compare current HEAD to a given ref (branch, tag, or SHA).
+ * @param {string} dir – path to the Git repo
+ * @param {string} ref – branch name, tag, or commit SHA to diff against HEAD
+ * @returns {Promise<string>} the diff between HEAD and ref
+ */
+export async function getCompare(dir, ref) {
+    try {
+        const { stdout } = await execP(
+            `git diff HEAD..${ref}`,
+            { cwd: dir, maxBuffer: DEFAULT_MAX_BUFFER }
+        );
+        return stdout;
+    } catch (err) {
+        console.error('getCompare failed:', err);
+        throw new Error(
+            `Could not diff HEAD against "${ref}": ${err.stderr || err.message}`
+        );
+    }
+}
+
 
 /**
  * List all local and remote branches.
@@ -230,40 +251,40 @@ export async function deleteBranch(dir, branch, remote, force = false) {
  */
 export async function restoreBranch(dir, branch, remote) {
     await ensureLocalRepo(dir);
-  
+
     // 1) nuke any stale lock
     const lockPath = path.join(dir, '.git', 'index.lock');
     await fs.promises.rm(lockPath, { force: true });
-  
+
     // 2) stash everything (ignore failure)
     try {
-      await execP('git stash push --include-untracked -m "auto-stash before checkout"', { cwd: dir });
-    } catch {}
-  
+        await execP('git stash push --include-untracked -m "auto-stash before checkout"', { cwd: dir });
+    } catch { }
+
     // 3) checkout (with fallback to force)
     try {
-      if (remote) {
-        await execP(`git fetch ${remote}`, { cwd: dir });
-        await execP(`git checkout --track ${remote}/${branch}`, { cwd: dir });
-      } else {
-        await execP(`git rev-parse --verify ${branch}`, { cwd: dir }); // branch exists?
-        await execP(`git checkout ${branch}`, { cwd: dir });
-      }
+        if (remote) {
+            await execP(`git fetch ${remote}`, { cwd: dir });
+            await execP(`git checkout --track ${remote}/${branch}`, { cwd: dir });
+        } else {
+            await execP(`git rev-parse --verify ${branch}`, { cwd: dir }); // branch exists?
+            await execP(`git checkout ${branch}`, { cwd: dir });
+        }
     } catch (err) {
-      // if normal checkout fails, try a forced one
-      console.warn(`normal checkout failed: ${err.message}, attempting forced checkout`);
-      await execP(`git checkout -f ${branch}`, { cwd: dir });
+        // if normal checkout fails, try a forced one
+        console.warn(`normal checkout failed: ${err.message}, attempting forced checkout`);
+        await execP(`git checkout -f ${branch}`, { cwd: dir });
     }
-  
+
     // 4) reapply stash (ignore errors)
     try {
-      await execP('git stash apply', { cwd: dir });
-    } catch {}
-  
+        await execP('git stash apply', { cwd: dir });
+    } catch { }
+
     // success! no exception → HTTP 200
-  }
-  
-  
+}
+
+
 /**
  * Merge one branch into another (supports remote sources).
  * Failsafe: init repo for local merges.
@@ -447,6 +468,32 @@ export async function cleanWorkingDirectory(dir, force = true, dirs = true) {
     await execP(`git clean ${flags}`, { cwd: dir });
 }
 
+/**
+ * Stage one or more paths.
+ * @param {string} dir   – repo directory
+ * @param {string[]} files – list of file paths to stage
+ */
+export async function stageFiles(dir, files) {
+    // ensure repo exists & cwd is correct
+    await ensureLocalRepo(dir);
+    // git add each file
+    const fileList = Array.isArray(files) ? files.join(' ') : files;
+    await execP(`git add ${fileList}`, { cwd: dir });
+  }
+  
+  /**
+   * Unstage one or more paths (reset them from the index).
+   * @param {string} dir   – repo directory
+   * @param {string[]} files – list of file paths to unstage
+   */
+  export async function unstageFiles(dir, files) {
+    await ensureLocalRepo(dir);
+    const fileList = Array.isArray(files) ? files.join(' ') : files;
+    // reset only those files in the index back to HEAD
+    await execP(`git reset HEAD -- ${fileList}`, { cwd: dir });
+  }
+  
+
 
 /**
  * Factory that turns a “service” into a Koa-style handler.
@@ -510,58 +557,61 @@ export async function getStatus(dir) {
 
 // ─── Service adapters ─────────────────────────────────────────────────────────
 const gitServices = {
-    listVersions: ({ maxCount }) => listVersions(SAVED_DIR, maxCount).then(versions => ({ versions })),
-    getChangelog: ({ ref }) => getChangelog(SAVED_DIR, ref).then(changelog => ({ changelog })),
-    listBranches: () => listBranches(SAVED_DIR).then(branches => ({ branches })),
+    listVersions: ({ maxCount }) => listVersions(GIT_DIR, maxCount).then(versions => ({ versions })),
+    getChangelog: ({ ref }) => getChangelog(GIT_DIR, ref).then(changelog => ({ changelog })),
+    listBranches: () => listBranches(GIT_DIR).then(branches => ({ branches })),
     createBranch: ({ branch, remote, startPoint }) =>
-        createBranch(SAVED_DIR, branch, remote, startPoint)
+        createBranch(GIT_DIR, branch, remote, startPoint)
             .then(() => ({ message: `Branch '${branch}' created${remote ? ` from ${remote}` : ''}` })),
     deleteBranch: ({ branch, remote, force }) =>
-        deleteBranch(SAVED_DIR, branch, remote, force)
+        deleteBranch(GIT_DIR, branch, remote, force)
             .then(() => ({ message: `Branch '${branch}' deleted${remote ? ` from ${remote}` : ''}` })),
     restoreBranch: ({ branch, remote }) =>
-        restoreBranch(SAVED_DIR, branch, remote)
+        restoreBranch(GIT_DIR, branch, remote)
             .then(() => ({ message: `Checked out '${branch}'${remote ? ` from ${remote}` : ''}` })),
     mergeBranch: ({ sourceBranch, sourceRemote, targetBranch, targetRemote }) =>
-        mergeBranch(SAVED_DIR, sourceBranch, sourceRemote, targetBranch, targetRemote)
+        mergeBranch(GIT_DIR, sourceBranch, sourceRemote, targetBranch, targetRemote)
             .then(() => ({
                 message: `Merged '${sourceBranch}'${sourceRemote ? ` from ${sourceRemote}` : ''} into '${targetBranch}'`
             })),
     pushBranch: ({ branch, remote }) =>
-        pushBranch(SAVED_DIR, branch, remote)
+        pushBranch(GIT_DIR, branch, remote)
             .then(() => ({ message: `Pushed '${branch}' to '${remote || 'origin'}'` })),
     pullBranch: ({ branch, remote }) =>
-        pullBranch(SAVED_DIR, branch, remote)
+        pullBranch(GIT_DIR, branch, remote)
             .then(() => ({ message: `Pulled '${branch}'${remote ? ` from ${remote}` : ''}` })),
     restoreFiles: ({ ref, files }) =>
-        restoreFilesFromRef(SAVED_DIR, ref, files)
+        restoreFilesFromRef(GIT_DIR, ref, files)
             .then(() => ({ message: `Files restored from '${ref}'` })),
     commitPaths: ({ paths }) => {
         if (!Array.isArray(paths) || !paths.length) {
             throw new Error('Missing paths array');
         }
-        return commitGitSnapshot(SAVED_DIR, paths)
+        return commitGitSnapshot(GIT_DIR, paths)
             .then(() => ({ message: `Committed: ${paths.join(', ')}` }));
     },
-    removeLocal: () => removeLocalGitRepo(SAVED_DIR).then(() => ({ message: 'Local Git repo removed.' })),
-    currentBranch: () => getCurrentBranch(SAVED_DIR).then(branch => ({ branch })),
-    listRemotes: () => listRemotes(SAVED_DIR).then(remotes => ({ remotes })),
-    setRemote: ({ name, url }) => setRemoteUrl(SAVED_DIR, name, url)
+    removeLocal: () => removeLocalGitRepo(GIT_DIR).then(() => ({ message: 'Local Git repo removed.' })),
+    currentBranch: () => getCurrentBranch(GIT_DIR).then(branch => ({ branch })),
+    listRemotes: () => listRemotes(GIT_DIR).then(remotes => ({ remotes })),
+    setRemote: ({ name, url }) => setRemoteUrl(GIT_DIR, name, url)
         .then(() => ({ message: `Remote '${name}' set to '${url}'.` })),
-    fetchAll: () => fetchAll(SAVED_DIR).then(() => ({ message: 'Fetched all remotes.' })),
-    hardReset: ({ commit }) => hardReset(SAVED_DIR, commit)
+    fetchAll: () => fetchAll(GIT_DIR).then(() => ({ message: 'Fetched all remotes.' })),
+    hardReset: ({ commit }) => hardReset(GIT_DIR, commit)
         .then(() => ({ message: `Hard reset to '${commit || 'HEAD'}'.` })),
     stashAll: ({ includeUntracked }) =>
-        stashAll(SAVED_DIR, includeUntracked)
+        stashAll(GIT_DIR, includeUntracked)
             .then(stashRef => ({ message: `Stashed as ${stashRef}.` })),
-    applyStash: ({ stashRef }) => applyStash(SAVED_DIR, stashRef)
+    applyStash: ({ stashRef }) => applyStash(GIT_DIR, stashRef)
         .then(() => ({ message: `Applied stash '${stashRef || 'stash@{0}'}'.` })),
-    dropStash: ({ stashRef }) => dropStash(SAVED_DIR, stashRef)
+    dropStash: ({ stashRef }) => dropStash(GIT_DIR, stashRef)
         .then(() => ({ message: `Dropped stash '${stashRef || 'stash@{0}'}'.` })),
     cleanWorkdir: ({ force, dirs }) =>
-        cleanWorkingDirectory(SAVED_DIR, force, dirs)
+        cleanWorkingDirectory(GIT_DIR, force, dirs)
             .then(() => ({ message: 'Cleaned working directory.' })),
-    status: () => getStatus(SAVED_DIR).then(({ staged, unstaged }) => ({ staged, unstaged })),
+    status: () => getStatus(GIT_DIR).then(({ staged, unstaged }) => ({ staged, unstaged })),
+    stage:    ({ files }) => stageFiles(GIT_DIR, files).then(() => ({ message: `Staged ${files.join(', ')}` })),
+  unstage:  ({ files }) => unstageFiles(GIT_DIR, files).then(() => ({ message: `Unstaged ${files.join(', ')}` })),
+    getCompare: ({ ref }) => getCompare(GIT_DIR, ref).then(changelog => ({ changelog }))
 };
 
 // ─── Generate handlers ─────────────────────────────────────────────────────────
@@ -594,6 +644,12 @@ export const commitPathsRoute = makeRoute(
     gitServices.commitPaths,
     { required: ['paths'], method: 'POST', successCode: 200 }
 );
+export const getCompareRoute = makeRoute(
+    gitServices.getCompare,
+    { required: ['ref'], method: 'POST' }
+);
+export const stageRoute   = makeRoute(gitServices.stage,   { required: ['files'], method: 'POST' });
+export const unstageRoute = makeRoute(gitServices.unstage, { required: ['files'], method: 'POST' });
 
 
 /**
@@ -619,7 +675,10 @@ export const routesConfig = {
     '/api/git/drop-stash': { POST: dropStashRoute },
     '/api/git/clean': { POST: cleanWorkingDirectoryRoute },
     '/api/git/commit-paths': { POST: commitPathsRoute },
-    '/api/git/status': { GET: statusRoute }
+    '/api/git/status': { GET: statusRoute },
+    '/api/git/compare': { POST: getCompareRoute },
+    '/api/git/stage':   { POST: stageRoute },
+    '/api/git/unstage': { POST: unstageRoute }
 };
 
 
@@ -744,5 +803,19 @@ export const gitToolCalls = {
     async clean_working_directory({ dir, force, dirs }) {
         await cleanWorkingDirectory(dir, force, dirs);
         return { result: JSON.stringify({ message: 'Cleaned working directory.' }) };
-    }
+    },
+
+    /**
+     * Compare HEAD to a given ref.
+     * @param dir – repo path
+     * @param ref – branch name or commit SHA
+     */
+    async get_compare({ dir, ref }) {
+        if (!ref) throw new Error('Missing ref');
+        const changelog = await getCompare(dir, ref);
+        return {
+            result: JSON.stringify({ changelog }),
+            didWriteOp: false
+        };
+    },
 }

@@ -3,10 +3,11 @@ import fs from 'fs/promises';
 import fsSync from 'fs'
 import http from 'http';
 import https from 'https';
-import { 
-  makeFileWalker, 
-  sseChannel, 
-  pendingConsoleHistory 
+import { Transform } from 'stream';
+import {
+  makeFileWalker,
+  sseChannel,
+  pendingConsoleHistory
 } from './serverUtil.js';
 
 
@@ -196,7 +197,7 @@ export const baseFunctionSchemas = [
   },
   {
     name: 'get_console_history',
-    description: 'Ask the front-end for window.__consoleHistory__; returns an array of {level,timestamp,args}',
+    description: 'Ask the (assumed to be running) front-end for window.__consoleHistory__; returns an array of {level,timestamp,args}',
     parameters: {
       type: 'object',
       properties: {
@@ -204,8 +205,38 @@ export const baseFunctionSchemas = [
       },
       required: ['summary_prompt']
     }
+  },
+  {
+    name: 'search_replace',
+    description: 'Search for a string (or regex) and replace it in one file or across many files',
+    parameters: {
+      type: 'object',
+      properties: {
+        folder: { type: 'string', description: 'Root folder to search in' },
+        filename: {
+          type: 'string',
+          description: 'If provided, only operate on this single file (relative to folder)'
+        },
+        search: {
+          type: 'string',
+          description: 'Literal string or RegExp to search for'
+        },
+        replace: {
+          type: 'string',
+          description: 'Replacement text'
+        },
+        bulk: {
+          type: 'boolean',
+          description: 'If true, apply replace across all files under folder; otherwise only filename'
+        },
+        summary_prompt: {
+          type: 'string',
+          description: 'System prompt for summarizing results if output is large'
+        }
+      },
+      required: ['folder', 'search', 'replace', 'summary_prompt']
+    }
   }
-  
 ];
 
 export const gitFunctionSchemas = [
@@ -257,7 +288,7 @@ export const gitFunctionSchemas = [
     parameters: {
       type: 'object',
       properties: {
-        dir:            { type: 'string', description: 'Path to the directory containing the .git folder' },
+        dir: { type: 'string', description: 'Path to the directory containing the .git folder' },
         summary_prompt: { type: 'string', description: 'System prompt for summarizing removal result.' }
       },
       required: ['dir', 'summary_prompt']
@@ -269,7 +300,7 @@ export const gitFunctionSchemas = [
     parameters: {
       type: 'object',
       properties: {
-        dir:            { type: 'string', description: 'Path to the Git repository directory' },
+        dir: { type: 'string', description: 'Path to the Git repository directory' },
         summary_prompt: { type: 'string', description: 'System prompt for summarizing branch name.' }
       },
       required: ['dir', 'summary_prompt']
@@ -281,7 +312,7 @@ export const gitFunctionSchemas = [
     parameters: {
       type: 'object',
       properties: {
-        dir:            { type: 'string', description: 'Path to the Git repository directory' },
+        dir: { type: 'string', description: 'Path to the Git repository directory' },
         summary_prompt: { type: 'string', description: 'System prompt for summarizing remotes list.' }
       },
       required: ['dir', 'summary_prompt']
@@ -293,9 +324,9 @@ export const gitFunctionSchemas = [
     parameters: {
       type: 'object',
       properties: {
-        dir:            { type: 'string', description: 'Path to the Git repository directory' },
-        name:           { type: 'string', description: 'Name of the remote to add or update (e.g., "origin")' },
-        url:            { type: 'string', description: 'URL of the remote repository' },
+        dir: { type: 'string', description: 'Path to the Git repository directory' },
+        name: { type: 'string', description: 'Name of the remote to add or update (e.g., "origin")' },
+        url: { type: 'string', description: 'URL of the remote repository' },
         summary_prompt: { type: 'string', description: 'System prompt for summarizing remote configuration result.' }
       },
       required: ['dir', 'name', 'url', 'summary_prompt']
@@ -307,7 +338,7 @@ export const gitFunctionSchemas = [
     parameters: {
       type: 'object',
       properties: {
-        dir:            { type: 'string', description: 'Path to the Git repository directory' },
+        dir: { type: 'string', description: 'Path to the Git repository directory' },
         summary_prompt: { type: 'string', description: 'System prompt for summarizing fetch result.' }
       },
       required: ['dir', 'summary_prompt']
@@ -319,8 +350,8 @@ export const gitFunctionSchemas = [
     parameters: {
       type: 'object',
       properties: {
-        dir:            { type: 'string', description: 'Path to the Git repository directory' },
-        commit:         { type: 'string', description: 'Commit SHA or ref to reset to (defaults to HEAD)' },
+        dir: { type: 'string', description: 'Path to the Git repository directory' },
+        commit: { type: 'string', description: 'Commit SHA or ref to reset to (defaults to HEAD)' },
         summary_prompt: { type: 'string', description: 'System prompt for summarizing reset result.' }
       },
       required: ['dir', 'summary_prompt']
@@ -332,9 +363,9 @@ export const gitFunctionSchemas = [
     parameters: {
       type: 'object',
       properties: {
-        dir:              { type: 'string', description: 'Path to the Git repository directory' },
+        dir: { type: 'string', description: 'Path to the Git repository directory' },
         includeUntracked: { type: 'boolean', description: 'Whether to include untracked files in the stash' },
-        summary_prompt:   { type: 'string', description: 'System prompt for summarizing stash result.' }
+        summary_prompt: { type: 'string', description: 'System prompt for summarizing stash result.' }
       },
       required: ['dir', 'summary_prompt']
     }
@@ -345,8 +376,8 @@ export const gitFunctionSchemas = [
     parameters: {
       type: 'object',
       properties: {
-        dir:            { type: 'string', description: 'Path to the Git repository directory' },
-        stashRef:       { type: 'string', description: 'Stash reference to apply (e.g., "stash@{0}")' },
+        dir: { type: 'string', description: 'Path to the Git repository directory' },
+        stashRef: { type: 'string', description: 'Stash reference to apply (e.g., "stash@{0}")' },
         summary_prompt: { type: 'string', description: 'System prompt for summarizing apply-stash result.' }
       },
       required: ['dir', 'summary_prompt']
@@ -358,8 +389,8 @@ export const gitFunctionSchemas = [
     parameters: {
       type: 'object',
       properties: {
-        dir:            { type: 'string', description: 'Path to the Git repository directory' },
-        stashRef:       { type: 'string', description: 'Stash reference to drop (e.g., "stash@{0}")' },
+        dir: { type: 'string', description: 'Path to the Git repository directory' },
+        stashRef: { type: 'string', description: 'Stash reference to drop (e.g., "stash@{0}")' },
         summary_prompt: { type: 'string', description: 'System prompt for summarizing drop-stash result.' }
       },
       required: ['dir', 'summary_prompt']
@@ -371,9 +402,9 @@ export const gitFunctionSchemas = [
     parameters: {
       type: 'object',
       properties: {
-        dir:            { type: 'string', description: 'Path to the Git repository directory' },
-        force:          { type: 'boolean', description: 'Whether to force deletion of untracked files' },
-        dirs:           { type: 'boolean', description: 'Whether to remove untracked directories' },
+        dir: { type: 'string', description: 'Path to the Git repository directory' },
+        force: { type: 'boolean', description: 'Whether to force deletion of untracked files' },
+        dirs: { type: 'boolean', description: 'Whether to remove untracked directories' },
         summary_prompt: { type: 'string', description: 'System prompt for summarizing clean result.' }
       },
       required: ['dir', 'summary_prompt']
@@ -390,7 +421,7 @@ export const gitFunctionSchemas = [
           description: "Path to the Git repository directory"
         },
         ref: {
-        type: "string",
+          type: "string",
           description: "Branch name or commit SHA to diff against HEAD"
         },
         summary_prompt: {
@@ -431,174 +462,244 @@ export const tools = [
 
 
 export const baseToolHandlers = {
-  
-    async read_file({ folder, filename }, { safe }) {
-      const fp = safe(folder, filename);
-      try {
-        const txt = await fs.readFile(fp, 'utf-8');
-        const st  = await fs.stat(fp);
-        return {
-          result: JSON.stringify({
-            content: txt,
-            byteLength: st.size,
-            modifiedTime: st.mtime.toISOString()
-          })
-        };
-      } catch (err) {
-        if (err.code === 'ENOENT') {
-          return { result: JSON.stringify({ content: '', byteLength: 0, modifiedTime: null }) };
-        }
-        throw err;
-      }
-    },
-  
-    async write_file({ folder, filename, content, replace_range, insert_at }, { safe }) {
-      const dir = safe(folder);
-      await fs.mkdir(dir, { recursive: true });
-      const fp = safe(folder, filename);
-  
-      let existing = '';
-      try { existing = await fs.readFile(fp, 'utf-8'); } catch {}
-  
-      let out = content;
-      if (replace_range) {
-        out = existing.slice(0, replace_range.start)
-            + content
-            + existing.slice(replace_range.end);
-      } else if (Number.isInteger(insert_at)) {
-        out = existing.slice(0, insert_at) + content + existing.slice(insert_at);
-      }
-  
-      await fs.writeFile(fp, out, 'utf-8');
-      const st2 = await fs.stat(fp);
-  
+
+  async read_file({ folder, filename }, { safe }) {
+    const fp = safe(folder, filename);
+    try {
+      const txt = await fs.readFile(fp, 'utf-8');
+      const st = await fs.stat(fp);
       return {
-        result: JSON.stringify({ byteLength: st2.size }),
-        didWriteOp: true
+        result: JSON.stringify({
+          content: txt,
+          byteLength: st.size,
+          modifiedTime: st.mtime.toISOString()
+        })
       };
-    },
-  
-    async copy_file({ source, destination }, { safe, root }) {
-      const src = safe(source);
-      const dst = safe(destination);
-      if (!src.startsWith(root) || !dst.startsWith(root)) {
-        return { result: `Error: invalid path (outside project root)` };
+    } catch (err) {
+      if (err.code === 'ENOENT') {
+        return { result: JSON.stringify({ content: '', byteLength: 0, modifiedTime: null }) };
       }
-      await fs.mkdir(path.dirname(dst), { recursive: true });
-      try {
-        await fs.copyFile(src, dst);
-        return { result: `Copied ${source} → ${destination}`, didWriteOp: true };
-      } catch (err) {
-        if (err.code === 'ENOENT') {
-          return { result: `Error copying "${source}": file not found` };
+      throw err;
+    }
+  },
+
+  async write_file({ folder, filename, content, replace_range, insert_at }, { safe }) {
+    const dir = safe(folder);
+    await fs.mkdir(dir, { recursive: true });
+    const fp = safe(folder, filename);
+
+    let existing = '';
+    try { existing = await fs.readFile(fp, 'utf-8'); } catch { }
+
+    let out = content;
+    if (replace_range) {
+      out = existing.slice(0, replace_range.start)
+        + content
+        + existing.slice(replace_range.end);
+    } else if (Number.isInteger(insert_at)) {
+      out = existing.slice(0, insert_at) + content + existing.slice(insert_at);
+    }
+
+    await fs.writeFile(fp, out, 'utf-8');
+    const st2 = await fs.stat(fp);
+
+    return {
+      result: JSON.stringify({ byteLength: st2.size }),
+      didWriteOp: true
+    };
+  },
+
+  async search_replace(
+    { folder, filename, search, replace, bulk = false },
+    { safe }
+  ) {
+    const rootDir = safe(folder);
+    const files = bulk
+      ? (await makeFileWalker({ recursive: true, skip_node_modules: true })(rootDir))
+          .filter(f => /\.(js|ts|json|txt)$/.test(f))   // adjust as needed
+      : [ path.join(rootDir, filename) ];
+  
+    const results = [];
+    for (const f of files) {
+      let stat;
+      try { stat = await fs.stat(f); }
+      catch { continue; }
+  
+      // choose streaming for >10 MB
+      if (stat.size > 10 * 1024 * 1024) {
+        const tmp = f + '.tmp';
+        await new Promise((res, rej) => {
+          const rs = fsSync.createReadStream(f);
+          const ws = fsSync.createWriteStream(tmp);
+          rs
+            .pipe(new ReplaceStream(search, replace))
+            .pipe(ws)
+            .on('finish', res)
+            .on('error', rej);
+        });
+        await fs.rename(tmp, f);
+        results.push(`(stream) replaced in ${path.relative(rootDir, f)}`);
+      } else {
+        // small-file fallback
+        const src = await fs.readFile(f, 'utf-8');
+        const updated = src.replace(new RegExp(search, 'g'), replace);
+        if (updated !== src) {
+          await fs.writeFile(f, updated, 'utf-8');
+          results.push(`(buffer) replaced in ${path.relative(rootDir, f)}`);
         }
+      }
+    }
+  
+    return {
+      result: JSON.stringify({ filesModified: results }),
+      didWriteOp: results.length > 0
+    };
+  },
+
+  async copy_file({ source, destination }, { safe, root }) {
+    const src = safe(source);
+    const dst = safe(destination);
+    if (!src.startsWith(root) || !dst.startsWith(root)) {
+      return { result: `Error: invalid path (outside project root)` };
+    }
+    await fs.mkdir(path.dirname(dst), { recursive: true });
+    try {
+      await fs.copyFile(src, dst);
+      return { result: `Copied ${source} → ${destination}`, didWriteOp: true };
+    } catch (err) {
+      if (err.code === 'ENOENT') {
+        return { result: `Error copying "${source}": file not found` };
+      }
+      throw err;
+    }
+  },
+
+  async fetch_file({ url, destination }, { safe }) {
+    const dst = safe(destination);
+    await fs.mkdir(path.dirname(dst), { recursive: true });
+
+    let succeeded = false;
+    try {
+      await new Promise((resolve, reject) => {
+        const client = url.startsWith('https') ? https : http;
+        const req = client.get(url, res => {
+          if (res.statusCode !== 200) {
+            return reject(new Error(`HTTP ${res.statusCode}`));
+          }
+          const stream = fsSync.createWriteStream(dst);
+          res.pipe(stream);
+          stream.once('finish', () => stream.close(resolve));
+        });
+        req.once('error', err => {
+          fsSync.unlink(dst, () => { });
+          reject(err);
+        });
+      });
+      succeeded = true;
+    } catch (err) {
+      return { result: `Error fetching "${url}": ${err.message}` };
+    }
+
+    if (succeeded) {
+      return { result: `Fetched ${url} → ${destination}`, didWriteOp: true };
+    }
+  },
+
+  async list_directory({ folder = '.', recursive, skip_node_modules, deep_node_modules }, { safe }) {
+    const absPath = safe(folder);
+    let items = [];
+    try {
+      const walker = makeFileWalker({
+        recursive,
+        skip_node_modules: skip_node_modules !== false,
+        deep_node_modules: deep_node_modules === true
+      });
+      items = await walker(absPath);
+    } catch (err) {
+      if (err.code === 'ENOENT') {
+        items = [];
+      } else {
         throw err;
       }
-    },
-  
-    async fetch_file({ url, destination }, { safe }) {
-      const dst = safe(destination);
-      await fs.mkdir(path.dirname(dst), { recursive: true });
-  
-      let succeeded = false;
-      try {
-        await new Promise((resolve, reject) => {
-          const client = url.startsWith('https') ? https : http;
-          const req = client.get(url, res => {
-            if (res.statusCode !== 200) {
-              return reject(new Error(`HTTP ${res.statusCode}`));
-            }
-            const stream = fsSync.createWriteStream(dst);
-            res.pipe(stream);
-            stream.once('finish', () => stream.close(resolve));
-          });
-          req.once('error', err => {
-            fsSync.unlink(dst, () => {});
-            reject(err);
-          });
-        });
-        succeeded = true;
-      } catch (err) {
-        return { result: `Error fetching "${url}": ${err.message}` };
-      }
-  
-      if (succeeded) {
-        return { result: `Fetched ${url} → ${destination}`, didWriteOp: true };
-      }
-    },
-  
-    async list_directory({ folder='.', recursive, skip_node_modules, deep_node_modules }, { safe }) {
-      const absPath = safe(folder);
-      let items = [];
-      try {
-        const walker = makeFileWalker({
-          recursive,
-          skip_node_modules: skip_node_modules !== false,
-          deep_node_modules: deep_node_modules === true
-        });
-        items = await walker(absPath);
-      } catch (err) {
-        if (err.code === 'ENOENT') {
-          items = [];
-        } else {
-          throw err;
-        }
-      }
-      return { result: JSON.stringify(items) };
-    },
-  
-    async move_file({ source, destination }, { safe }) {
-      const src = safe(source);
-      const dst = safe(destination);
-      await fs.mkdir(path.dirname(dst), { recursive: true });
-      await fs.rename(src, dst);
-      return { result: `Moved ${source} → ${destination}`, didWriteOp: true };
-    },
-  
-    async remove_directory({ folder, recursive }, { safe }) {
-      await fs.rm(safe(folder), { recursive: recursive !== false, force: true });
-      return { result: `Removed directory ${folder}`, didWriteOp: true };
-    },
-  
-    async rename_file({ folder, old_filename, new_filename }, { safe }) {
-      const dir = safe(folder);
-      await fs.rename(path.join(dir, old_filename), path.join(dir, new_filename));
-      return { result: `Renamed ${old_filename} → ${new_filename}`, didWriteOp: true };
-    },
-  
-    async reset_project(_, { root }) {
-      const msg = await resetProject();
-      return { result: msg, didWriteOp: true };
-    },
-  
-    async run_shell({ command }, { root }) {
-      if (command === 'npm run build') {
-        return { result: 'Illegal command.' };
-      }
-      const { stdout, stderr, code } = await new Promise(resolve =>
-        require('child_process').exec(command, { cwd: root, shell: true }, (err, so, se) =>
-          resolve({ stdout: so.trim(), stderr: se.trim(), code: err?.code ?? 0 })
-        )
-      );
-      return { result: JSON.stringify({ stdout, stderr, code }), didWriteOp: false };
-    },
-  
-    async reprompt_self({ new_prompt }) {
-      return { selfPrompt: new_prompt, result: 'Scheduled self-prompt' };
-    },
-  
-    async get_console_history(_, { }) {
-      const id = Math.random() * 1e15;
-      // assume sseChannel and pendingConsoleHistory are in scope
-      sseChannel.broadcast(JSON.stringify({ type: 'request_console_history', id }), 'console');
-      const history = await new Promise((resolve, reject) => {
-        pendingConsoleHistory.set(id, resolve);
-        setTimeout(() => {
-          pendingConsoleHistory.delete(id);
-          reject(new Error('console history timeout'));
-        }, 15000);
-      });
-      return { result: JSON.stringify(history) };
-    },
-  
+    }
+    return { result: JSON.stringify(items) };
+  },
+
+  async move_file({ source, destination }, { safe }) {
+    const src = safe(source);
+    const dst = safe(destination);
+    await fs.mkdir(path.dirname(dst), { recursive: true });
+    await fs.rename(src, dst);
+    return { result: `Moved ${source} → ${destination}`, didWriteOp: true };
+  },
+
+  async remove_directory({ folder, recursive }, { safe }) {
+    await fs.rm(safe(folder), { recursive: recursive !== false, force: true });
+    return { result: `Removed directory ${folder}`, didWriteOp: true };
+  },
+
+  async rename_file({ folder, old_filename, new_filename }, { safe }) {
+    const dir = safe(folder);
+    await fs.rename(path.join(dir, old_filename), path.join(dir, new_filename));
+    return { result: `Renamed ${old_filename} → ${new_filename}`, didWriteOp: true };
+  },
+
+  async reset_project(_, { root }) {
+    const msg = await resetProject();
+    return { result: msg, didWriteOp: true };
+  },
+
+  async run_shell({ command }, { root }) {
+    if (command === 'npm run build') {
+      return { result: 'Illegal command.' };
+    }
+    const { stdout, stderr, code } = await new Promise(resolve =>
+      require('child_process').exec(command, { cwd: root, shell: true }, (err, so, se) =>
+        resolve({ stdout: so.trim(), stderr: se.trim(), code: err?.code ?? 0 })
+      )
+    );
+    return { result: JSON.stringify({ stdout, stderr, code }), didWriteOp: false };
+  },
+
+  async reprompt_self({ new_prompt }) {
+    return { selfPrompt: new_prompt, result: 'Scheduled self-prompt' };
+  },
+
+  async get_console_history(_, { }) {
+    const id = Math.random() * 1e15;
+    // assume sseChannel and pendingConsoleHistory are in scope
+    sseChannel.broadcast(JSON.stringify({ type: 'request_console_history', id }), 'console');
+    const history = await new Promise((resolve, reject) => {
+      pendingConsoleHistory.set(id, resolve);
+      setTimeout(() => {
+        pendingConsoleHistory.delete(id);
+        reject(new Error('console history timeout'));
+      }, 15000);
+    });
+    return { result: JSON.stringify(history) };
+  },
+
+}
+
+
+class ReplaceStream extends Transform {
+  constructor(search, replace) {
+    super();
+    // allow passing a string or a RegExp
+    this.rx = typeof search === 'string' ? new RegExp(search, 'g') : search;
+    this.replace = replace;
+    this.tail = '';
+  }
+  _transform(chunk, _enc, cb) {
+    const data = this.tail + chunk.toString();
+    const parts = data.split(this.rx);
+    this.tail = parts.pop();                      // save last partial match
+    this.push(parts.join(this.replace));
+    cb();
+  }
+  _flush(cb) {
+    // flush any remaining tail
+    this.push(this.tail.replace(this.rx, this.replace));
+    cb();
+  }
 }

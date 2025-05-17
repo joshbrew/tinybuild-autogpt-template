@@ -56,41 +56,67 @@ async function setAISnapshotBranch(dir, branch) {
  */
 
 /**
- * Make sure we’re on an “ai-branchN”:
- *  • if ai.snapshotBranch is set, stash, checkout & re-apply stash
- *  • otherwise pick the next ai-branchN, create & checkout it, and record it
+ * Return true iff a local branch actually exists.
+ * (The try/catch swallows the non-zero exit when it doesn’t.)
  */
-async function ensureAISnapshotBranch(dir) {
-    // stash everything (including untracked)
-    await execP('git stash push --include-untracked -m "AI auto-stash before branch switch"', { cwd: dir });
-
-    let branch = await getAISnapshotBranch(dir);
-    if (branch) {
-        // checkout existing AI branch
-        await execP(`git checkout ${branch}`, { cwd: dir });
-    } else {
-        // find existing ai-branch* names
-        const { stdout } = await execP(
-            'git branch --list "ai-branch*"',
-            { cwd: dir }
-        );
-        const existing = stdout
-            .split('\n')
-            .map(l => l.replace('*', '').trim())
-            .filter(Boolean);
-
-        const nextNum = existing.length + 1;
-        branch = `ai-branch${nextNum}`;
-        await execP(`git checkout -b ${branch}`, { cwd: dir });
-        await setAISnapshotBranch(dir, branch);
+async function branchExists(dir, name) {
+    try {
+      await execP(`git rev-parse --verify --quiet refs/heads/${name}`, { cwd: dir });
+      return true;           // command exited 0 → branch present
+    } catch {
+      return false;          // exited 1 (or anything non-zero) → branch absent
     }
-
-    // re-apply stash so you keep your working changes
-    // this will pop the most recent stash entry
-    await execP('git stash apply', { cwd: dir });
-
+  }
+  
+  /**
+   * Make sure we’re on an `ai-branchN`.
+   *   • If ai.snapshotBranch is recorded **and still present**, switch to it.
+   *   • Otherwise create the next free `ai-branchN`, record it, and switch.
+   * All working changes are preserved via stash-push / stash-pop.
+   */
+  async function ensureAISnapshotBranch(dir) {
+    // 1️⃣ Save everything (incl. untracked) so nothing gets lost.
+    await execP(
+      'git stash push --include-untracked -m "AI auto-stash before branch switch"',
+      { cwd: dir }
+    );
+  
+    // 2️⃣ Decide which branch we should end up on.
+    let branch = await getAISnapshotBranch(dir);
+  
+    if (branch && !(await branchExists(dir, branch))) {
+      // Recorded branch vanished – fall back to “make a new one”.
+      branch = null;
+    }
+  
+    if (!branch) {
+      // Enumerate existing ai-branch* names to pick the next free number.
+      const { stdout } = await execP('git branch --list "ai-branch*"', { cwd: dir });
+      const nums = stdout
+        .split('\n')
+        .map(l => l.replace('*', '').trim())
+        .filter(Boolean)
+        .map(b => Number(b.replace('ai-branch', '')))
+        .filter(n => !Number.isNaN(n));
+  
+      const nextNum = nums.length ? Math.max(...nums) + 1 : 1;
+      branch = `ai-branch${nextNum}`;
+  
+      await execP(`git checkout -b ${branch}`, { cwd: dir });
+      await setAISnapshotBranch(dir, branch);
+    } else {
+      await execP(`git checkout ${branch}`, { cwd: dir });
+    }
+  
+    // 3️⃣ Restore the stash and immediately drop it so it won’t pile up.
+    try {
+      await execP('git stash pop --index', { cwd: dir });
+    } catch {
+      /* nothing to pop */ }
+  
     return branch;
-}
+  }
+  
 
 /**
  * Stage & commit (and push) only on your AI branch.

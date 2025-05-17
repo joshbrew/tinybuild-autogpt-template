@@ -833,20 +833,31 @@ export const baseToolHandlers = {
 
   async create_sidecar({ command, args = [], cwd, env = {} }, { root }) {
     // spawn the child; inherit ENV plus any overrides
-    const proc = spawn(command, args, {
-      cwd:   cwd ? path.resolve(root, cwd) : root,
-      env:   { ...process.env, ...env },
-      shell: false,
-      stdio: ['ignore', 'pipe', 'pipe']
+    const proc = spawn(
+      command,           // can be "npm" or a whole string like "npm run dev"
+      args,
+      {
+        cwd:   cwd ? path.resolve(root, cwd) : root,
+        env:   { ...process.env, ...env },
+        shell: true,     
+        stdio: ['ignore', 'pipe', 'pipe']
+      }
+    );
+    
+   
+    proc.on('error', err => {
+      entry.stderrBuf += `[spawn error] ${err.message}\n`;
+      entry.proc = null;          // mark as dead
     });
-  
+    
     const id = nextSideId++;
     const entry = { proc, stdoutBuf: '', stderrBuf: '' };
     sidecars.set(id, entry);
   
     proc.stdout.on('data', d => { entry.stdoutBuf += d.toString(); });
     proc.stderr.on('data', d => { entry.stderrBuf += d.toString(); });
-  
+   
+
     proc.on('exit', () => {
       // keep last output but mark as exited by deleting proc ref
       entry.exitedAt = Date.now();

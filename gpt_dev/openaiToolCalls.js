@@ -4,6 +4,7 @@ import fsSync from 'fs'
 import http from 'http';
 import https from 'https';
 import { Transform } from 'stream';
+import { spawn, exec } from 'child_process'
 import {
   makeFileWalker,
   sseChannel,
@@ -679,7 +680,7 @@ export const baseToolHandlers = {
       return { result: 'Illegal command.' };
     }
     const { stdout, stderr, code } = await new Promise(resolve =>
-      require('child_process').exec(command, { cwd: root, shell: true }, (err, so, se) =>
+      exec(command, { cwd: root, shell: true }, (err, so, se) =>
         resolve({ stdout: so.trim(), stderr: se.trim(), code: err?.code ?? 0 })
       )
     );
@@ -708,7 +709,6 @@ export const baseToolHandlers = {
     // Make sure the script path stays inside the project root
     const src = safe(script);
   
-    const { spawn } = require('child_process');
     const proc = spawn('python', [src, ...args], { cwd: root });
   
     let stdout = '';

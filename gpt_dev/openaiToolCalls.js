@@ -261,8 +261,106 @@ export const baseFunctionSchemas = [
       },
       required: ['script', 'summary_prompt']
     }
-  }
+  },
+  {
+    /* ── 1. create_sidecar ───────────────────────────────────────────── */
+    name: 'create_sidecar',
+    description:
+      'Launch a long-running subprocess (“sidecar”) that keeps running in the background; returns { id } where id is an auto-incrementing numeric handle.',
+    parameters: {
+      type: 'object',
+      properties: {
+        command: {
+          type: 'string',
+          description: 'Executable or shell command to run (e.g. "node", "python", "npm run dev").'
+        },
+        args: {
+          type: 'array',
+          description: 'Positional arguments to pass to the command.',
+          items: { type: 'string' },
+          default: []
+        },
+        cwd: {
+          type: 'string',
+          description: 'Working directory for the subprocess (optional).'
+        },
+        env: {
+          type: 'object',
+          description: 'Environment variables as key/value pairs (optional).',
+          additionalProperties: { type: 'string' }
+        },
+        summary_prompt: {
+          type: 'string',
+          description: 'System prompt for summarizing the spawn result.'
+        }
+      },
+      required: ['command', 'summary_prompt']
+    }
+  },
+  
+  {
+    /* ── 2. get_sidecar_output ───────────────────────────────────────── */
+    name: 'get_sidecar_output',
+    description:
+      'Retrieve the current captured stdout (and stderr) buffer for a running sidecar; returns { stdout, stderr, running }.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: {
+          type: 'integer',
+          description: 'Numeric sidecar id returned from create_sidecar.'
+        },
+        summary_prompt: {
+          type: 'string',
+          description: 'System prompt for summarizing captured output.'
+        }
+      },
+      required: ['id', 'summary_prompt']
+    }
+  },
+  
+  {
+    /* ── 3. terminate_sidecar ────────────────────────────────────────── */
+    name: 'terminate_sidecar',
+    description:
+      'Terminate a running sidecar process by id, **or** terminate *all* sidecars when no id is supplied; returns { terminatedIds }.',
+    parameters: {
+      type: 'object',
+      properties: {
+        id: {
+          type: 'integer',
+          description: 'Sidecar id to terminate (omit to kill every active sidecar).'
+        },
+        summary_prompt: {
+          type: 'string',
+          description: 'System prompt for summarizing the termination outcome.'
+        }
+      },
+      required: ['summary_prompt']
+    }
+  },
 
+  {
+    name: 'wait',
+    description: 'Pause execution for a specified duration (milliseconds) before continuing.',
+    parameters: {
+      type: 'object',
+      properties: {
+        milliseconds: {
+          type: 'integer',
+          description: 'How long to wait, in ms (e.g. 2000 = 2 s).',
+          minimum: 0
+        },
+        summary_prompt: {
+          type: 'string',
+          description: 'System prompt for summarizing when the wait completes.'
+        }
+      },
+      required: ['milliseconds', 'summary_prompt']
+    }
+  }
+  
+  
 ];
 
 export const gitFunctionSchemas = [
@@ -485,7 +583,9 @@ export const tools = [
 
 ].map(fn => ({ type: 'function', function: fn }));
 
-
+/* ────────── sidecar process table ────────── */
+const sidecars   = new Map();   // id → { proc, stdoutBuf, stderrBuf }
+let   nextSideId = 1;           // simple auto-increment handle
 
 export const baseToolHandlers = {
 
@@ -729,8 +829,81 @@ export const baseToolHandlers = {
       }),
       didWriteOp: false
     };
-  }  
+  },
 
+  async create_sidecar({ command, args = [], cwd, env = {} }, { root }) {
+    // spawn the child; inherit ENV plus any overrides
+    const proc = spawn(command, args, {
+      cwd:   cwd ? path.resolve(root, cwd) : root,
+      env:   { ...process.env, ...env },
+      shell: false,
+      stdio: ['ignore', 'pipe', 'pipe']
+    });
+  
+    const id = nextSideId++;
+    const entry = { proc, stdoutBuf: '', stderrBuf: '' };
+    sidecars.set(id, entry);
+  
+    proc.stdout.on('data', d => { entry.stdoutBuf += d.toString(); });
+    proc.stderr.on('data', d => { entry.stderrBuf += d.toString(); });
+  
+    proc.on('exit', () => {
+      // keep last output but mark as exited by deleting proc ref
+      entry.exitedAt = Date.now();
+      entry.proc = null;
+    });
+  
+    return { result: JSON.stringify({ id }), didWriteOp: false };
+  },
+
+  async get_sidecar_output({ id }, _ctx) {
+    if (!sidecars.has(id)) {
+      return { result: JSON.stringify({ error: `No sidecar with id ${id}` }) };
+    }
+  
+    const { proc, stdoutBuf, stderrBuf, exitedAt } = sidecars.get(id);
+    return {
+      result: JSON.stringify({
+        stdout: stdoutBuf,
+        stderr: stderrBuf,
+        running: !!proc,
+        exitedAt: exitedAt ?? null
+      }),
+      didWriteOp: false
+    };
+  },
+  
+  async terminate_sidecar({ id }, _ctx) {
+    const idsToKill = id != null ? [id] : [...sidecars.keys()];
+    const terminated = [];
+  
+    for (const sid of idsToKill) {
+      const entry = sidecars.get(sid);
+      if (!entry) continue;
+  
+      if (entry.proc) {
+        try { entry.proc.kill('SIGTERM'); } catch {}
+        entry.proc = null;
+      }
+      terminated.push(sid);
+      // we leave the buffers for post-mortem inspection, but you may sidecars.delete(sid) if preferred
+    }
+  
+    return {
+      result: JSON.stringify({ terminatedIds: terminated }),
+      didWriteOp: false
+    };
+  },
+ 
+  async wait({ milliseconds }, _ctx) {
+    await new Promise(res => setTimeout(res, milliseconds));
+    return {
+      result: `Waited ${milliseconds} ms`,
+      didWriteOp: false
+    };
+  },
+  
+  
 }
 
 

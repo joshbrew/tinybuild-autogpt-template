@@ -236,7 +236,32 @@ export const baseFunctionSchemas = [
       },
       required: ['folder', 'search', 'replace', 'summary_prompt']
     }
+  },
+  {
+    name: 'run_python',
+    description: 'Run a Python script in the project root with optional positional arguments; returns { stdout, stderr, code }',
+    parameters: {
+      type: 'object',
+      properties: {
+        script: {
+          type: 'string',
+          description: 'Path to the Python file (relative to project root, e.g. "scripts/my_job.py")'
+        },
+        args: {
+          type: 'array',
+          description: 'Positional arguments to pass to the script',
+          items: { type: 'string' },
+          default: []
+        },
+        summary_prompt: {
+          type: 'string',
+          description: 'System prompt for summarizing Python output if it is large.'
+        }
+      },
+      required: ['script', 'summary_prompt']
+    }
   }
+
 ];
 
 export const gitFunctionSchemas = [
@@ -516,15 +541,15 @@ export const baseToolHandlers = {
     const rootDir = safe(folder);
     const files = bulk
       ? (await makeFileWalker({ recursive: true, skip_node_modules: true })(rootDir))
-          .filter(f => /\.(js|ts|json|txt)$/.test(f))   // adjust as needed
-      : [ path.join(rootDir, filename) ];
-  
+        .filter(f => /\.(js|ts|json|txt)$/.test(f))   // adjust as needed
+      : [path.join(rootDir, filename)];
+
     const results = [];
     for (const f of files) {
       let stat;
       try { stat = await fs.stat(f); }
       catch { continue; }
-  
+
       // choose streaming for >10 MB
       if (stat.size > 10 * 1024 * 1024) {
         const tmp = f + '.tmp';
@@ -549,7 +574,7 @@ export const baseToolHandlers = {
         }
       }
     }
-  
+
     return {
       result: JSON.stringify({ filesModified: results }),
       didWriteOp: results.length > 0
@@ -678,6 +703,33 @@ export const baseToolHandlers = {
     });
     return { result: JSON.stringify(history) };
   },
+
+  async run_python({ script, args = [] }, { root, safe }) {
+    // Make sure the script path stays inside the project root
+    const src = safe(script);
+  
+    const { spawn } = require('child_process');
+    const proc = spawn('python', [src, ...args], { cwd: root });
+  
+    let stdout = '';
+    let stderr = '';
+  
+    proc.stdout.on('data', d => { stdout += d.toString(); });
+    proc.stderr.on('data', d => { stderr += d.toString(); });
+  
+    const code = await new Promise(resolve => {
+      proc.on('close', c => resolve(c ?? 0));
+    });
+  
+    return {
+      result: JSON.stringify({
+        stdout: stdout.trim(),
+        stderr: stderr.trim(),
+        code
+      }),
+      didWriteOp: false
+    };
+  }  
 
 }
 

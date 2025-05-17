@@ -813,10 +813,20 @@ export const baseToolHandlers = {
   
     let stdout = '';
     let stderr = '';
-  
-    proc.stdout.on('data', d => { stdout += d.toString(); });
-    proc.stderr.on('data', d => { stderr += d.toString(); });
-  
+
+    /* stream → buffer + echo */
+    proc.stdout.on('data', chunk => {
+      const text = chunk.toString();
+      entry.stdoutBuf += text;
+      process.stdout.write(`[python] ${text}`);
+    });
+    proc.stderr.on('data', chunk => {
+      const text = chunk.toString();
+      entry.stderrBuf += text;
+      process.stderr.write(`[python ERROR] ${text}`);
+    });
+
+
     const code = await new Promise(resolve => {
       proc.on('close', c => resolve(c ?? 0));
     });
@@ -854,9 +864,20 @@ export const baseToolHandlers = {
     const entry = { proc, stdoutBuf: '', stderrBuf: '' };
     sidecars.set(id, entry);
   
-    proc.stdout.on('data', d => { entry.stdoutBuf += d.toString(); });
-    proc.stderr.on('data', d => { entry.stderrBuf += d.toString(); });
-   
+    
+    /* stream → buffer + echo */
+    proc.stdout.on('data', chunk => {
+      const text = chunk.toString();
+      entry.stdoutBuf += text;
+      process.stdout.write(`[sidecar] ${text}`);
+    });
+    proc.stderr.on('data', chunk => {
+      const text = chunk.toString();
+      entry.stderrBuf += text;
+      process.stderr.write(`[sidecar ERROR] ${text}`);
+    });
+
+
 
     proc.on('exit', () => {
       // keep last output but mark as exited by deleting proc ref

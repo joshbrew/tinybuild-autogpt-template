@@ -4,7 +4,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import {
   flattenContent,
-  rateLimit, lockThread, unlockThread, 
+  rateLimit, lockThread, unlockThread,
   logError, logInfo, logSuccess, logWarn
 } from './serverUtil.js'
 
@@ -34,7 +34,12 @@ import {
   createAssistant, deleteAssistant,
   retrieveThreadRun,
   checkCancel, requestCancel,
+  uploadDataURL, uploadFile
 } from './openaiClient.js';
+
+// import {
+//   sseChannel
+// } from './serverUtil.js'
 
 import dotenv from 'dotenv';
 dotenv.config();
@@ -43,7 +48,7 @@ dotenv.config();
 
 export const toolHandlers = {
   // ─── Filesystem Tools ──────────────────────────────────────────────────
-  
+
   async smart_chat({ messages, max_completion_tokens }, { }) {
     const resp = await createChatCompletion({
       model: SMART_MODEL,
@@ -56,7 +61,7 @@ export const toolHandlers = {
 
   // Base file system etc calls.
   ...baseToolHandlers,
-  
+
   // ─── Git Tools ─────────────────────────────────────────────────────────
   ...gitToolCalls
 
@@ -358,64 +363,82 @@ export async function postUserMessage(openaiThreadId, prompt) {
 }
 
 // ─── Thread & run helpers ────────────────────────────────────────────
-export async function createRunWithRateLimitRetry(threadId, assistantId, userPrompt, tools) {
+export async function createRunWithRateLimitRetry(
+  threadId,
+  assistantId,
+  userPrompt,
+  tools,
+  fileIds = []      // ← new optional array of OpenAI file IDs
+) {
   const instrString = userPrompt.trim();
-  const instrTok = estimateTokensFromString(instrString);
+  const instrTok    = estimateTokensFromString(instrString);
 
   // ensure context will still fit
   const COMP_BUF = 5_000;
   await shrinkContextIfNeeded(threadId, instrTok + COMP_BUF);
 
   // compute your ideal reserve
-  const ctxTok = threadTokenTally.get(threadId) || 0;
-  const rawReserve = Math.ceil((ctxTok + instrTok) * RUN_SAFE_MULT) + COMP_BUF;
+  const ctxTok      = threadTokenTally.get(threadId) || 0;
+  const rawReserve  = Math.ceil((ctxTok + instrTok) * RUN_SAFE_MULT) + COMP_BUF;
   const MAX_RESERVE = TOKEN_LIMIT_PER_MIN - 1_000;
 
   // clamp to the model’s per-minute bucket minus what’s already used
-  const used = tokenHistory.reduce((sum, e) => sum + e.tokens, 0);
+  const used         = tokenHistory.reduce((sum, e) => sum + e.tokens, 0);
   const remainingMin = TOKEN_LIMIT_PER_MIN - used - COMP_BUF;
-  const finalReserve = Math.min(rawReserve, MAX_RESERVE, Math.max(0, remainingMin));
+  const finalReserve = Math.min(
+    rawReserve,
+    MAX_RESERVE,
+    Math.max(0, remainingMin)
+  );
 
   // throttle before creating the run
   await throttleByTokens(finalReserve);
   await rateLimit();
 
-  // fire off the run, retrying on TPM errors
+  // build run parameters
+  const runParams = {
+    assistant_id: assistantId,
+    instructions: instrString,
+    tools,
+    tool_choice: 'auto',
+    // only include file IDs if provided
+    ...(Array.isArray(fileIds) && fileIds.length > 0
+      ? { tool_resources: { files: fileIds } }
+      : {})
+  };
+
+  // fire off the run, retrying on rate-limit or “already active” errors
   let run;
   while (true) {
     try {
-      run = await createThreadRun(threadId, {
-        assistant_id: assistantId,
-        instructions: instrString,
-        tools,
-        tool_choice: 'auto'
-      });
+      run = await createThreadRun(threadId, runParams);
       break;
     } catch (err) {
-      if (err.message.includes('rate_limit_exceeded')) {
-        // existing sleep/back-off…
-      }
-      else if (err.message.includes('already has an active run')) {
-        logWarn(`[createRun] active run detected, waiting for it to finish…`);
-        await waitForActiveRuns(threadId);
-        // now retry
+      const msg = err.message || '';
+      if (msg.includes('rate_limit_exceeded')) {
+        // your existing back-off logic…
+        await backoffSleep();  
         continue;
       }
-      else {
-        throw err;
+      if (msg.includes('already has an active run')) {
+        logWarn(`[createRun] active run detected, waiting for it to finish…`);
+        await waitForActiveRuns(threadId);
+        continue;
       }
+      throw err;
     }
   }
 
   // account for the reservation in your token history
   tokenHistory.push({
-    ts: Date.now(),
+    ts:     Date.now(),
     tokens: finalReserve,
-    tag: run.id
+    tag:    run.id
   });
 
   return run;
 }
+
 
 
 
@@ -534,7 +557,7 @@ Do NOT emit any extra text as it will be parsed directly into submitToolOutputs 
 export async function submitToolOutputsSafe(
   threadId,
   runId,
-  toolCalls,    // ← new
+  toolCalls,    
   toolOutputs
 ) {
   // ensure our context is in shape
@@ -559,7 +582,6 @@ export async function submitToolOutputsSafe(
     const { fnLogs, didWriteOp } = await waitForActiveRuns(threadId);
     return { fnLogs, didWriteOp };
   }
-
 
   // otherwise summarise each call individually
   await summarizePerCall(threadId, runId, toolCalls, toolOutputs);
@@ -787,7 +809,7 @@ export async function waitForActiveRuns(threadId) {
  * @returns {Promise<string[]>} array of run IDs that were requested to cancel
  */
 export async function cancelActiveRuns(threadId) {
-  const res    = await listThreadRuns(threadId, { limit: 100 });
+  const res = await listThreadRuns(threadId, { limit: 100 });
   const active = res.data.filter(r =>
     ['queued', 'in_progress', 'requires_action'].includes(r.status)
   );
@@ -815,10 +837,10 @@ export async function cancelActiveRuns(threadId) {
 
 
 // ─── Main assistant run loop, now using both throttles ─────────────
-export async function runAssistantLoop(threadId, assistantId, instructions) {
+export async function runAssistantLoop(threadId, assistantId, instructions, fileIds) {
   let writeOp = false;
   // 1) start the run
-  const run = await createRunWithRateLimitRetry(threadId, assistantId, instructions, tools);
+  const run = await createRunWithRateLimitRetry(threadId, assistantId, instructions, tools, fileIds);
   const fnLogs = [];
   const toolCallsHandled = new Set();
   let selfPrompt = null;
@@ -901,7 +923,7 @@ export async function fetchAssistantReply(threadId, lastStatus) {
 
 
 // ─── Self-prompt continuation ────────────────────────────────────────
-export async function handleSelfPrompt(threadId, assistantId, selfPrompt) {
+export async function handleSelfPrompt(threadId, assistantId, selfPrompt, fileIds) {
   // 1a. Post the self-prompt as if it were a user message
   const userMsg = await safeCreateMessage(threadId, {
     role: 'user',
@@ -913,7 +935,8 @@ export async function handleSelfPrompt(threadId, assistantId, selfPrompt) {
     threadId,
     assistantId,
     selfPrompt,
-    tools
+    tools,
+    fileIds
   );
 
   // 1c. Loop through queued → requires_action → tool calls → completed
@@ -934,7 +957,13 @@ export async function handleSelfPrompt(threadId, assistantId, selfPrompt) {
 
 
 // ─── Core prompt flow ─────────────────────────────────────────────────
-export async function handlePrompt({ prompt, threadId, title, systemPrompt }, savedDir) {
+export async function handlePrompt({ 
+  prompt, 
+  threadId, 
+  title, 
+  systemPrompt,
+  filePaths
+}, savedDir) {
   if (!prompt?.trim()) {
     return { error: true, errorMessage: 'Missing prompt', logs: [] };
   }
@@ -959,12 +988,34 @@ export async function handlePrompt({ prompt, threadId, title, systemPrompt }, sa
       checkCancel(convo.openaiThreadId);
     }
 
+    // If filePaths supplied, upload each entry
+    let fileIds;
+    if (Array.isArray(filePaths) && filePaths.length) {
+      fileIds = [];
+      for (const entry of filePaths) {
+        // Data-URL?  (starts with "data:")
+        if (typeof entry === 'string' && entry.startsWith('data:')) {
+          console.log(`[handlePrompt] uploading dataURL…`);
+          const file = await uploadDataURL(entry);
+          fileIds.push(file.id);
+          console.log(`[handlePrompt] uploaded dataURL → ${file.id}`);
+        }
+        // Otherwise treat as a server-side path relative to cwd
+        else if (typeof entry === 'string') {
+          console.log(`[handlePrompt] uploading local path ${entry}…`);
+          const file = await uploadFile(path.join(savedDir, entry));
+          fileIds.push(file.id);
+          console.log(`[handlePrompt] uploaded ${entry} → ${file.id}`);
+        }
+      }
+    }
+
     // 3) Try up to 3 times
     for (let attempt = 1; attempt <= 3; attempt++) {
       try {
         // a) clear stray runs before posting
         if (convo.openaiThreadId) {
-          const { didWriteOp:wWriteOp, fnLogs:wfnLogs } = await waitForActiveRuns(convo.openaiThreadId);
+          const { didWriteOp: wWriteOp, fnLogs: wfnLogs } = await waitForActiveRuns(convo.openaiThreadId);
           if (wWriteOp) writeOp = wWriteOp;
           allLogs.push(...wfnLogs);
           checkCancel(convo.openaiThreadId);
@@ -975,17 +1026,22 @@ export async function handlePrompt({ prompt, threadId, title, systemPrompt }, sa
         if (attempt === 1) {
           userMsg = await safeCreateMessage(convo.openaiThreadId, {
             role: 'user',
-            content: [{ type: 'text', text: prompt.trim() }]
+            content: [{ type: 'text', text: prompt.trim() }],
+            attachments: fileIds.length
+              ? fileIds.map(id => ({ file_id: id }))
+              : undefined
           });
         }
         checkCancel(convo.openaiThreadId);
         if (userMsg) convo.messages.push(userMsg);
 
+
         // c) run assistant + tools
-        const { fnLogs:rfnLogs, selfPrompt, didWriteOp:rWriteOp } = await runAssistantLoop(
+        const { fnLogs: rfnLogs, selfPrompt, didWriteOp: rWriteOp } = await runAssistantLoop(
           convo.openaiThreadId,
           assistantId,
-          systemPrompt || DEFAULT_SYSTEM_PROMPT
+          systemPrompt || DEFAULT_SYSTEM_PROMPT,
+          fileIds
         );
         if (rWriteOp) writeOp = rWriteOp;
         checkCancel(convo.openaiThreadId);
@@ -1005,7 +1061,7 @@ export async function handlePrompt({ prompt, threadId, title, systemPrompt }, sa
 
         let sp = selfPrompt;
         while (sp) {
-          const { userMsg, asstMsg, nextSelf, didWriteOp:hWriteOp, fnLogs:sfnLogs } =
+          const { userMsg, asstMsg, nextSelf, didWriteOp: hWriteOp, fnLogs: sfnLogs } =
             await handleSelfPrompt(convo.openaiThreadId, assistantId, sp);
 
           if (hWriteOp) writeOp = hWriteOp;
@@ -1025,7 +1081,7 @@ export async function handlePrompt({ prompt, threadId, title, systemPrompt }, sa
         if (writeOp) {
           await commitGitSnapshot();
         }
-    
+
         return {
           userMessageId: userMsg?.id,
           error: false,
@@ -1038,7 +1094,7 @@ export async function handlePrompt({ prompt, threadId, title, systemPrompt }, sa
       } catch (err) {
         // **Cancellation is final—don’t retry**
         await cancelActiveRuns(convo.openaiThreadId);
-        
+
         if (err.message === 'Cancelled by user') {
           return {
             error: false,

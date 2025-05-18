@@ -16,6 +16,7 @@ import { routesConfig as openaiRoutes } from './openaiRoutes.js';
 import { routesConfig as gitRoutes } from './gitHelper.js'
 
 
+
 //aggregate route definitions
 const routesConfig = {
   ...openaiRoutes,
@@ -172,7 +173,7 @@ function createServer(cfg) {
   const server = cfg.protocol === 'https'
     ? https.createServer({ key: fs.readFileSync(cfg.keypath), cert: fs.readFileSync(cfg.certpath) }, onRequest)
     : http.createServer((req, res) => onRequest(req, res, cfg));
-  attachWebSocketHandler(server);
+  attachWebSocketHandler(server, routesConfig);
   return server;
 }
 

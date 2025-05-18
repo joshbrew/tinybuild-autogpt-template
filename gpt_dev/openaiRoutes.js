@@ -1,7 +1,14 @@
 // ./gpt_dev/openaiRoutes.js
 import path from 'path';
 import * as fsp from 'fs/promises';
-import { openai, requestCancel } from './openaiClient.js';
+import { 
+  openai, 
+  requestCancel,
+  uploadFile,      
+  uploadDataURL,
+  deleteFile,
+  createChatCompletion
+} from './openaiClient.js';
 import { SAVED_DIR } from './clientConfig.js';
 import {
   cancelActiveRuns,
@@ -12,7 +19,8 @@ import {
 import {
   pendingConsoleHistory,
   resetProject,
-  makeFileWalker
+  makeFileWalker,
+  sseChannel
 } from './serverUtil.js';
 
 // --- Handlers ---
@@ -333,8 +341,87 @@ export async function cancelRun(ctx) {
   return ctx.json(200, { canceled: true });
 }
 
+export async function uploadFileRoute(ctx) {
+  const { file_path } = ctx.request.body;
+  if (!file_path || typeof file_path !== 'string') {
+    return ctx.json(400, { error: 'Missing file_path' });
+  }
+  try {
+    const meta = await uploadFile(file_path);
+    return ctx.json(201, meta);          // includes { id, filename, … }
+  } catch (err) {
+    return ctx.json(500, { error: err.message });
+  }
+}
+
+export async function uploadDataURLRoute(ctx) {
+  const { data_url, filename } = ctx.request.body;
+  if (!data_url || typeof data_url !== 'string') {
+    return ctx.json(400, { error: 'Missing data_url' });
+  }
+  try {
+    const meta = await uploadDataURL(data_url, filename);
+    return ctx.json(201, meta);          // same structure as uploadFile
+  } catch (err) {
+    return ctx.json(500, { error: err.message });
+  }
+}
+
+export async function deleteFileRoute(ctx) {
+  const { file_id } = ctx.params;
+  if (!file_id) {
+    return ctx.json(400, { error: 'Missing file_id' });
+  }
+  try {
+    const confirmation = await deleteOpenAIFile(file_id);
+    return ctx.json(200, confirmation);     // { id, deleted: true }
+  } catch (err) {
+    return ctx.json(err.status || 500, { error: err.message });
+  }
+}
+
+/**
+ * Expose our createChatCompletion wrapper over OpenAI’s chat.completions.create.
+ * Accepts the same params object you’d pass to the SDK.
+ * Returns the full OpenAI response JSON.
+ 
+  @example
+    fetch('/api/chat/completion', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-4o',
+        messages: [
+          { role: 'user', content: 'Hello, world!' }
+        ]
+        // optional: temperature, max_tokens, stream, etc.
+      })
+    })
+      .then(r => r.json())
+      .then(console.log);
+*/
+export async function createChatCompletionRoute(ctx) {
+  const params = ctx.request.body;
+  try {
+    // call your client helper; no onToken since HTTP isn’t streaming here
+    const completion = await createChatCompletion(
+      params,
+      (delta)=>{
+        sseChannel.broadcast(delta, 'completion');
+      }
+    );
+    return ctx.json(200, completion);
+  } catch (err) {
+    // bubble up any errors
+    const status = err.status || 500;
+    return ctx.json(status, { error: err.message });
+  }
+}
+
+
 // --- Route definitions ---
 export const routesConfig = {
+  '/api/chat/completion':             { POST: createChatCompletionRoute },
   '/api/threads':                     { GET: listThreads },
   '/api/threads/:id':                 { GET: getThreadInfo, DELETE: deleteThread },
   '/api/threads/:id/title':           { POST: renameThread },
@@ -349,5 +436,10 @@ export const routesConfig = {
   '/api/files':                       { GET: listFiles },
   '/api/prompt':                      { POST: handlePromptRoute },
   '/api/reset_project':               { POST: resetProject },
-  '/api/console_history':             { POST: postConsoleHistory }
+  '/api/console_history':             { POST: postConsoleHistory },
+  '/api/upload/file':                 { POST: uploadFileRoute },
+  '/api/upload/dataurl':              { POST: uploadDataURLRoute },
+  '/api/upload/file/:file_id':        { DELETE: deleteFileRoute }
 };
+
+

@@ -4,7 +4,6 @@ import fs from 'fs/promises';
 // import https from 'https';
 import dotenv from 'dotenv';
 import { WebSocketServer } from 'ws';
-import { routesConfig } from './openaiRoutes.js'; // pattern->methods object
 import { createSession, createChannel } from 'better-sse';
 
 dotenv.config();
@@ -37,7 +36,7 @@ export function getEnvVar(name, defaultValue) {
 }
 
 /**
- * Set common headers (incl. CORS) and status code on the response.
+ * Set common headers (incl. CORS) and status code on the response. This is unsecure fyi should be configd for what ports or urls you specifically want
  */
 export function setHeaders(response, statusCode, contentType = 'application/json') {
   response.writeHead(statusCode, {
@@ -82,9 +81,9 @@ export function createHttpContext(req, res, params, query) {
 }
 
 // --- HTTP handler export ---
-export function httpHandler(req, res, next) {
+export function httpHandler(req, res, next, routes) {
   const url = new URL(req.url, `http://${req.headers.host}`);
-  const route = findRoute(url.pathname);
+  const route = findRoute(url.pathname, routes);
   if (!route) return next();
 
   const handler = route.methods[req.method];
@@ -121,7 +120,7 @@ export function createWsContext(ws, msg) {
 }
 
 // --- WebSocket attachment export ---
-export function attachWebSocketHandler(server) {
+export function attachWebSocketHandler(server, routes) {
   const wss = new WebSocketServer({ noServer: true });
 
   server.on('upgrade', (request, socket, head) => {
@@ -144,7 +143,7 @@ export function attachWebSocketHandler(server) {
         return ws.send(JSON.stringify({ error: 'Invalid JSON' }));
       }
 
-      const route = findRoute(msg.path);
+      const route = findRoute(msg.path, routes);
       if (!route) {
         return ws.send(JSON.stringify({ error: 'Not found' }));
       }
@@ -173,13 +172,13 @@ export async function handleSse(req, res) {
 }
 
 // --- Route finder ---
-export function findRoute(pathname) {
+export function findRoute(pathname, routes) {
   // exact match
-  if (routesConfig[pathname]) {
-    return { methods: routesConfig[pathname], params: {} };
+  if (routes[pathname]) {
+    return { methods: routes[pathname], params: {} };
   }
   // parameterized match
-  for (const [pattern, methods] of Object.entries(routesConfig)) {
+  for (const [pattern, methods] of Object.entries(routes)) {
     if (!pattern.includes('/:')) continue;
 
     const parts = pattern.split('/').filter(Boolean);
@@ -211,6 +210,7 @@ export function findRoute(pathname) {
   }
   return null;
 }
+
 
 // ─── Flatten content array to text ───────────────────────────────────
 export function flattenContent(contents) {

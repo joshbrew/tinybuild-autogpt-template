@@ -2,12 +2,13 @@
 import './gitBrowser'
 import './gpt_dev.css';
 
+import { DEFAULT_SYSTEM_PROMPT } from './openaiSystemPrompt.js'
 import { functionCapabilityOverview } from './components/functionsComponent';
 
-import { 
-  fetchThreads, fetchThreadById, 
-  deleteThreadById, sendPrompt, 
-  editMessage, deleteMessageById, 
+import {
+  fetchThreads, fetchThreadById,
+  deleteThreadById, sendPrompt,
+  editMessage, deleteMessageById,
   fetchFilesTree, API_BASE
 } from './frontendUtil';
 
@@ -66,13 +67,18 @@ template.innerHTML = `
         <button class="delete-chat-btn" title="Delete Chat">🗑️</button>
         <button class="view-files-btn">View Files</button>
         <button class="capabilities-btn" title="What can I do?">❓</button>
+        <button class="inspire-btn" title="Inspire me!">🌟</button>
       </div>
       <div class="gpt-chat-messages"></div>
       <form class="gpt-chat-form">
-        <textarea type="text" placeholder="Type your message…" autocomplete="off"></textarea>
+        <textarea type="text" placeholder="Type your message… (Shift + Enter to send)" autocomplete="off"></textarea>
+        <button type="button" class="attach-btn" title="Attach files">🔗</button>
         <button type="submit">Send</button>
         <button type="button" class="cancel-btn" disabled>Cancel</button>
+        <input type="file" multiple class="file-input" style="display:none"/>
       </form>
+      <!-- attachment list -->
+      <div class="attachment-list"></div>
     </div>
   </div>
 `;
@@ -91,25 +97,86 @@ class GptChat extends HTMLElement {
     if (this._init) return;
     this._init = true;
     this.append(template.content.cloneNode(true));
-  
-    this.threadList        = this.querySelector('.thread-list');
-    this.newChatBtn        = this.querySelector('.new-chat-btn');
+
+    this.threadList = this.querySelector('.thread-list');
+    this.newChatBtn = this.querySelector('.new-chat-btn');
     this.threadNameSidebar = this.querySelector('.thread-name-sidebar');
-    this.chatTitleEl       = this.querySelector('.chat-title');
-    this.deleteChatBtn     = this.querySelector('.delete-chat-btn');
-    this.viewFilesBtn      = this.querySelector('.view-files-btn');
-    this.chatMessages      = this.querySelector('.gpt-chat-messages');
-    this.form              = this.querySelector('.gpt-chat-form');
-    this.input             = this.form.querySelector('input');
-    this.sendBtn           = this.form.querySelector('button[type="submit"]');
-    this.cancelBtn         = this.form.querySelector('.cancel-btn');
-    this.resetProjectBtn   = this.querySelector('.reset-project-btn');
-    this.abortController   = null;
-    this.capabilitiesBtn   = this.querySelector('.capabilities-btn');
+    this.chatTitleEl = this.querySelector('.chat-title');
+    this.deleteChatBtn = this.querySelector('.delete-chat-btn');
+    this.viewFilesBtn = this.querySelector('.view-files-btn');
+    this.chatMessages = this.querySelector('.gpt-chat-messages');
+    this.form = this.querySelector('.gpt-chat-form');
+    this.input = this.form.querySelector('textarea');
+    this.sendBtn = this.form.querySelector('button[type="submit"]');
+    this.cancelBtn = this.form.querySelector('.cancel-btn');
+    this.resetProjectBtn = this.querySelector('.reset-project-btn');
+    this.abortController = null;
+    this.capabilitiesBtn = this.querySelector('.capabilities-btn');
+    this.streamBox = this.querySelector('.stream-box');
+    this.attachBtn = this.querySelector('.attach-btn');
+    this.fileInput = this.querySelector('.file-input');
+    this.attachmentListEl = this.querySelector('.attachment-list');
+    this.attachments = [];   // will hold File objects or { name, … }
+    this.inspireBtn      = this.querySelector('.inspire-btn');
+    this.inspireBtn.addEventListener('click', () => this._runInspire());
+  
+    
+    this.input.addEventListener('keydown', e => {
+      if (e.key === 'Enter' && e.shiftKey) {
+        e.preventDefault();                   // stop the newline
+        this.sendMessage(this.input.value);   // invoke the same send logic
+      }
+    });
+
+    this.attachBtn.addEventListener('click', () => {
+      this.fileInput.click();
+    });
+
+    this.input.addEventListener('paste', e => {
+      const clipboardItems = e.clipboardData && e.clipboardData.items;
+      if (!clipboardItems) return;
+    
+      let added = false;
+      for (const item of clipboardItems) {
+        // look only for file‐kind items whose MIME is image/*
+        if (item.kind === 'file' && item.type.startsWith('image/')) {
+          const blob = item.getAsFile();
+          // derive an extension and filename
+          const ext = blob.type.split('/')[1] || 'png';
+          const filename = `pasted_${Date.now()}.${ext}`;
+          // wrap in a File so it matches fileInput uploads
+          const file = new File([blob], filename, { type: blob.type });
+          // avoid duplicates by name
+          if (!this.attachments.find(a => a.name === file.name)) {
+            this.attachments.push(file);
+            added = true;
+          }
+        }
+      }
+    
+      if (added) {
+        // update the UI list
+        this._renderAttachmentList();
+        // prevent the raw image data from landing in the textarea
+        e.preventDefault();
+      }
+    });
+
+    this.fileInput.addEventListener('change', () => {
+      // Add new files, skipping duplicates by name
+      Array.from(this.fileInput.files).forEach(f => {
+        if (!this.attachments.find(a => a.name === f.name)) {
+          this.attachments.push(f);
+        }
+      });
+      this._renderAttachmentList();
+      // clear input so same file can be re-picked later if removed
+      this.fileInput.value = '';
+    });
 
     this.threadNameSidebar.style.display = 'none';
     this._ensureConfirmModal();
-  
+
     this.newChatBtn.addEventListener('click', () => this._createNewThread());
     this.deleteChatBtn.addEventListener('click', () => this._deleteCurrentThread());
     this.viewFilesBtn.addEventListener('click', () => this._showFileTree());
@@ -118,8 +185,9 @@ class GptChat extends HTMLElement {
       this.sendMessage(this.input.value);
     });
     this.capabilitiesBtn.addEventListener('click', () => this._showCapabilities());
+    this.currentPlaceholderContent = null;
 
-  
+
     this.cancelBtn.addEventListener('click', async () => {
       if (!this.abortController) return;
       // Abort the in-flight fetch
@@ -149,9 +217,9 @@ class GptChat extends HTMLElement {
         await this._confirm('Failed to reset project: ' + err.message);
       }
     });
-  
+
     this._loadThreads();
-  
+
     this.es = new EventSource(API_BASE + '/events');
     this.es.addEventListener('console', e => {
       const { id } = JSON.parse(e.data);
@@ -161,6 +229,84 @@ class GptChat extends HTMLElement {
         body: JSON.stringify({ id, history: window.__consoleHistory__ })
       });
     });
+    const onStreamEvent = e => {
+      let token = JSON.parse(e.data);                       // raw delta text
+      const target = this.currentPlaceholderContent;
+      if (!target) return;   
+      // first real token replaces the ellipsis
+      if (target.textContent === '…') {
+        target.textContent = token;
+      } else {
+        target.textContent += token;
+      }
+    }
+    this.es.addEventListener('stream', onStreamEvent);
+    this.es.addEventListener('completion', onStreamEvent);
+  }
+
+  async _runInspire() {
+
+    const modal = this._showInspireModal();
+
+    this.currentPlaceholderContent = modal.querySelector('.inspire-modal-body');
+    
+    const payload = {
+      model: 'o4-mini',
+      messages: [
+        { role: 'system',  content: DEFAULT_SYSTEM_PROMPT.trim() },
+        {
+          role: 'user',
+          content:
+            `Here are my capabilities:\n` +
+            JSON.stringify(functionCapabilityOverview, null, 2) +
+            `\n\nInspire me with possible prompts in a guide format. Preface with a bit of background to the whats and whys of the environment (including interop possibilities) in a kind way to stroke precious egos who get easily overwhelmed creatively, ease them in and get more technical with the suggestions as the list goes down, but note the api has limits. Keep it professional and adult but offer some fun options too like rendering and data visualization or interactivity tasks, perhaps refer to relevant resources relative to certain suggestions, you may or may not think outside the box but indicate as such.`
+        }
+      ]
+    };
+
+    let text = "";
+    try {
+      const res = await fetch(`${API_BASE}/api/chat/completion`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error(`Status ${res.status}`);
+      const data = await res.json();
+      text = data.choices?.[0]?.message?.content
+                 ?? JSON.stringify(data, null, 2);
+     
+    } catch (err) {
+    } 
+    if(modal) {
+      modal.addEventListener('click', e => {
+        if (e.target === modal) modal.remove();
+      });
+      modal.querySelector('.inspire-modal-close').disabled = false;
+      modal.querySelector('.inspire-modal-close')
+        .addEventListener('click', () => modal.remove());
+      const body = modal.querySelector('.inspire-modal-body');
+      body.textContent = text;
+    }
+  }
+
+  _showInspireModal() {
+    const overlay = document.createElement('div');
+    overlay.className = 'inspire-modal-overlay';
+    overlay.innerHTML = `
+      <div class="inspire-modal">
+        <div class="inspire-modal-header">
+          <h3>Here are some possibilities:</h3>
+          <button class="inspire-modal-close">❌</button>
+        </div>
+        <div class="inspire-modal-body">
+          <div class="inspire-spinner"><span></span><span></span><span></span></div>
+        </div>
+      </div>
+    `;
+    overlay.querySelector('.inspire-modal-close').disabled = true;
+    document.body.append(overlay);
+    return overlay;
   }
 
   _updateControls() {
@@ -170,7 +316,7 @@ class GptChat extends HTMLElement {
   _showCapabilities() {
     // Prevent multiple instances
     if (document.getElementById('capabilitiesModal')) return;
-  
+
     const modal = document.createElement('div');
     modal.id = 'capabilitiesModal';
     modal.innerHTML = `
@@ -186,10 +332,10 @@ class GptChat extends HTMLElement {
     });
     // Feed the overview data into the component
     modal.querySelector('tool-capabilities').overview = functionCapabilityOverview;
-  
+
     document.body.appendChild(modal);
   }
-  
+
   async _loadThreads() {
     try {
       this.threads = await fetchThreads();
@@ -209,6 +355,25 @@ class GptChat extends HTMLElement {
     this.threadNameSidebar.style.display =
       this.currentThreadId === null ? 'block' : 'none';
   }
+
+  _renderAttachmentList() {
+    this.attachmentListEl.innerHTML = '';
+    this.attachments.forEach((file, idx) => {
+      const item = document.createElement('span');
+      item.className = 'attachment-item';
+      item.textContent = file.name;
+      const removeBtn = document.createElement('button');
+      removeBtn.textContent = '✖';
+      removeBtn.title = 'Remove attachment';
+      removeBtn.addEventListener('click', () => {
+        this.attachments.splice(idx, 1);
+        this._renderAttachmentList();
+      });
+      item.append(' ', removeBtn);
+      this.attachmentListEl.append(item);
+    });
+  }
+
 
   _renderThreadList() {
     this.threadList.innerHTML = '';
@@ -385,11 +550,10 @@ class GptChat extends HTMLElement {
 
     const meta = document.createElement('div');
     meta.className = 'meta';
-    meta.textContent = `${
-      role === 'user' ? 'You' :
+    meta.textContent = `${role === 'user' ? 'You' :
       role === 'tool' ? '🔧 Tool' :
-      'GPT'
-    } • ${ts}`;
+        'GPT'
+      } • ${ts}`;
 
     const content = document.createElement('div');
     content.className = 'content';
@@ -469,37 +633,56 @@ class GptChat extends HTMLElement {
 
   async sendMessage(prompt) {
     if (!prompt.trim()) return;
-  
+
     // 1) Set up AbortController & enable Cancel button
     this.abortController = new AbortController();
     this.cancelBtn.disabled = false;
-  
+
     // 2) Show typing indicator
     const loading = document.createElement('div');
     loading.className = 'typing-indicator';
     loading.innerHTML = '<span></span><span></span><span></span>';
     this.chatMessages.appendChild(loading);
     this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
-  
     // 3) Echo user message
     const userTs = new Date().toLocaleString();
     const { wrap: userWrap } = this.appendMessage('user', prompt, userTs);
     this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
-  
+
     // 4) Disable input while waiting
     this.input.disabled = this.sendBtn.disabled = true;
     this.input.value = '';
-  
+
     // 5) Add placeholder for assistant
     const { wrap: placeholderWrap } = this.appendMessage('assistant', '…', '');
+    this.currentPlaceholderContent = placeholderWrap.querySelector('.content');
     this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
-  
+
     const payload = {
       prompt,
       threadId: this.currentThreadId,
       ...(this.currentThreadId ? {} : { title: this.threadNameSidebar.value.trim() })
     };
-  
+
+    // include filenames if any
+    if (this.attachments.length) {
+      function fileToDataURL(file) {
+        return new Promise(resolve => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.readAsDataURL(file);
+        });
+      }
+
+      const paths = await Promise.all(this.attachments.map(async a => {
+        // if the attachment already carries a .path (server file), send it directly
+        if (a.path) return a.path;
+        // otherwise it's a File in browser: convert to data URL
+        return await fileToDataURL(a);
+      }));
+      payload.filePaths = paths;
+    }
+
     let json;
     try {
       // pass the signal so we can abort
@@ -510,7 +693,10 @@ class GptChat extends HTMLElement {
       loading.remove();
       this.input.disabled = this.sendBtn.disabled = false;
       this.cancelBtn.disabled = true;
-  
+
+      this.attachments = [];
+      this._renderAttachmentList();
+
       const ts = new Date().toLocaleString();
       if (err.name === 'AbortError') {
         this.appendMessage('assistant', '⚠️ Cancelled by user', ts);
@@ -519,7 +705,10 @@ class GptChat extends HTMLElement {
       }
       return;
     }
-  
+
+    this.attachments = [];
+    this._renderAttachmentList();
+
     const {
       error,
       errorMessage,
@@ -529,7 +718,7 @@ class GptChat extends HTMLElement {
       userMessageId,
       assistantMessageId
     } = json;
-  
+
     // 6) Render any tool logs
     logs.forEach(entry => {
       if (entry.type === 'retry') {
@@ -542,11 +731,11 @@ class GptChat extends HTMLElement {
         this.appendToolEntry(entry);
       }
     });
-  
+
     // 7) Re-enable input
     this.input.disabled = this.sendBtn.disabled = false;
     this.input.focus();
-  
+
     // 8) Handle server-reported error
     if (error) {
       const ts2 = new Date().toLocaleString();
@@ -554,11 +743,10 @@ class GptChat extends HTMLElement {
       this.cancelBtn.disabled = true;
       return;
     }
-  
+
     // 9) On success, replace placeholder & show assistant reply
     placeholderWrap.remove();
     loading.remove();
-  
     userWrap.dataset.msgId = userMessageId;
     const ts3 = new Date().toLocaleTimeString();
     const content = typeof result === 'string'
@@ -567,10 +755,10 @@ class GptChat extends HTMLElement {
     const { wrap: asstWrap } = this.appendMessage('assistant', content, ts3);
     asstWrap.dataset.msgId = assistantMessageId;
     this.chatMessages.scrollTop = this.chatMessages.scrollHeight;
-  
+
     // 10) Disable Cancel now that we're done
     this.cancelBtn.disabled = true;
-  
+
     // 11) Thread bookkeeping (as before)
     if (!this.threads.find(t => t.id === threadId)) {
       this.threads.push({
@@ -648,7 +836,7 @@ class GptChat extends HTMLElement {
 
       const treeRoot = modal.querySelector('.file-tree-root');
       tree.forEach(node => treeRoot.append(render(node)));
-    
+
       document.body.append(modal);
     } catch (err) {
       console.error(err);
@@ -658,3 +846,5 @@ class GptChat extends HTMLElement {
 
 customElements.define('gpt-chat', GptChat);
 document.body.append(document.createElement('gpt-chat'));
+
+

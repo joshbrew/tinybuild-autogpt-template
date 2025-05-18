@@ -29,6 +29,14 @@ WIP (limit your api budget to <$10 !!!!)
       />
       <p>It installed its own dependencies and arranged a src folder with components, renamed the js to jsx including updating the bundler entryPoint to match.</p>
     </td>
+    <td>
+      Some inspiration.
+      <img
+        src="https://github.com/user-attachments/assets/9103fc6b-9114-4ff5-9a88-7d9d6f31fef8"
+        alt="Additional Suggestions"
+      />
+    </td>
+
   </tr>
 </table>
 

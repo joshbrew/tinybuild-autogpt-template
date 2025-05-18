@@ -31,12 +31,22 @@ WIP (limit your api budget to <$10 !!!!)
     </td>
     <td>
       Some inspiration.
-      <img
+      <table >
+    <tr>
+    <td>
+      <img style="width:100px;"
         src="https://github.com/user-attachments/assets/9103fc6b-9114-4ff5-9a88-7d9d6f31fef8"
         alt="Additional Suggestions"
       />
     </td>
-
+    <td>
+      <img style="width:100px;"
+        src="https://github.com/user-attachments/assets/a57938a4-0f84-4638-a1cc-ac2ae3879959"
+      />
+    </td>
+      </tr>
+      </table>
+      </td>
   </tr>
 </table>
 

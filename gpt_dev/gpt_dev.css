@@ -411,7 +411,7 @@ button:hover {
   background: #12151f;
   border-top: 1px solid #444;
 }
-.gpt-chat-form input {
+.gpt-chat-form textarea {
   flex: 1;
   padding: 0.75rem;
   background: #1f2430;
@@ -585,4 +585,36 @@ button:hover {
 #fileModal .git-browser-panel h3 {
   margin-top: 0;
   font-size: 14px;
+}
+
+
+#capabilitiesModal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+}
+
+#capabilitiesModal .capabilities-wrapper {
+  max-width: 600px;
+  max-height: 80vh;
+  overflow: auto;
+  background: #fff;
+  padding: 1.25rem;
+  border-radius: 8px;
+  box-shadow: 0 6px 16px rgba(0,0,0,.2);
+}
+
+#capabilitiesModal .close {
+  position: relative;
+  float:right;
+  top: .5rem;
+  right: .5rem;
+  background: none;
+  border: none;
+  font-size: 1.25rem;
+  cursor: pointer;
 }

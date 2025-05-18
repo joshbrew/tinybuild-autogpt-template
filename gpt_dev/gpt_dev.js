@@ -2,6 +2,8 @@
 import './gitBrowser'
 import './gpt_dev.css';
 
+import { functionCapabilityOverview } from './components/functionsComponent';
+
 import { 
   fetchThreads, fetchThreadById, 
   deleteThreadById, sendPrompt, 
@@ -63,10 +65,11 @@ template.innerHTML = `
         <h2 class="chat-title">← Select or create a chat</h2>
         <button class="delete-chat-btn" title="Delete Chat">🗑️</button>
         <button class="view-files-btn">View Files</button>
+        <button class="capabilities-btn" title="What can I do?">❓</button>
       </div>
       <div class="gpt-chat-messages"></div>
       <form class="gpt-chat-form">
-        <input type="text" placeholder="Type your message…" autocomplete="off"/>
+        <textarea type="text" placeholder="Type your message…" autocomplete="off"></textarea>
         <button type="submit">Send</button>
         <button type="button" class="cancel-btn" disabled>Cancel</button>
       </form>
@@ -100,9 +103,10 @@ class GptChat extends HTMLElement {
     this.input             = this.form.querySelector('input');
     this.sendBtn           = this.form.querySelector('button[type="submit"]');
     this.cancelBtn         = this.form.querySelector('.cancel-btn');
-    this.resetProjectBtn = this.querySelector('.reset-project-btn');
+    this.resetProjectBtn   = this.querySelector('.reset-project-btn');
     this.abortController   = null;
-  
+    this.capabilitiesBtn   = this.querySelector('.capabilities-btn');
+
     this.threadNameSidebar.style.display = 'none';
     this._ensureConfirmModal();
   
@@ -113,6 +117,8 @@ class GptChat extends HTMLElement {
       e.preventDefault();
       this.sendMessage(this.input.value);
     });
+    this.capabilitiesBtn.addEventListener('click', () => this._showCapabilities());
+
   
     this.cancelBtn.addEventListener('click', async () => {
       if (!this.abortController) return;
@@ -161,6 +167,29 @@ class GptChat extends HTMLElement {
     this.deleteChatBtn.disabled = !this.currentThreadId;
   }
 
+  _showCapabilities() {
+    // Prevent multiple instances
+    if (document.getElementById('capabilitiesModal')) return;
+  
+    const modal = document.createElement('div');
+    modal.id = 'capabilitiesModal';
+    modal.innerHTML = `
+      <div class="capabilities-wrapper">
+      <button class="close">❌</button><br/>
+      </tool-capabilities>
+        <tool-capabilities>
+      </div>
+    `;
+    modal.querySelector('.close').onclick = () => modal.remove();
+    modal.addEventListener('click', e => {
+      if (e.target === modal) modal.remove();
+    });
+    // Feed the overview data into the component
+    modal.querySelector('tool-capabilities').overview = functionCapabilityOverview;
+  
+    document.body.appendChild(modal);
+  }
+  
   async _loadThreads() {
     try {
       this.threads = await fetchThreads();
